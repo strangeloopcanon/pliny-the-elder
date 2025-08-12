@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "vei": {
+      "command": "python3",
+      "args": ["-m", "vei.router"],
+      "env": {
+        "VEI_SEED": "42042"
+      }
+    }
+  }
+}
+
+

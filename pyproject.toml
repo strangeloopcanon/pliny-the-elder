@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vei"
+version = "0.1.0"
+description = "Virtual Enterprise Internet (VEI) — MCP-native synthetic Slack/Mail/Browser world"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "VEI", email = "noreply@example.com" }
+]
+dependencies = [
+  "mcp>=1.2.0",
+  "pydantic>=2.7.0",
+  "typer>=0.12.3",
+  "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+browser = [
+  "playwright>=1.45.0"
+]
+llm = [
+  "openai>=1.55.0",
+  "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+vei-run = "vei.cli.vei_run:app"
+vei-build-scenario = "vei.cli.vei_build_scenario:app"
+vei-score = "vei.cli.vei_score:app"
+vei-llm-test = "vei.cli.vei_llm_test:app"
+vei-smoke = "vei.cli.vei_smoke:app"
+vei-chat = "vei.cli.vei_chat:app"
+vei-scenarios = "vei.cli.vei_scenarios:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vei*"]
+exclude = []
