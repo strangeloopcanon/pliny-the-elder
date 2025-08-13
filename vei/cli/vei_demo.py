@@ -116,6 +116,9 @@ def run(
                 for _ in range(max_steps):
                     obs = await _call(s, "vei.observe", {})
                     transcript.append({"observation": obs})
+                    pend = obs.get("pending_events", {})
+                    if pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
+                        break
                     menu = obs.get("action_menu", [])
                     menu_text = "\n".join(f"- {m.get('tool')} {json.dumps(m.get('args', m.get('args_schema', {})))}" for m in menu)
                     user = (
