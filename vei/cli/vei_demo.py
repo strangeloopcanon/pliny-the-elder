@@ -91,6 +91,7 @@ def run(
     max_steps: int = typer.Option(12, help="Max steps for LLM mode"),
     openai_base_url: str | None = typer.Option(None, help="Override OPENAI_BASE_URL"),
     openai_api_key: str | None = typer.Option(None, help="Override OPENAI_API_KEY"),
+    score: bool = typer.Option(False, help="Print score summary after transcript"),
 ) -> None:
     load_dotenv(override=True)
     if artifacts_dir:
@@ -168,17 +169,18 @@ def run(
     typer.echo(json.dumps(out, indent=2))
 
     # If we captured artifacts, try to score
-    try:
-        from vei.cli.vei_score import score as score_cmd
-        import typer.testing
-        if os.environ.get("VEI_ARTIFACTS_DIR"):
-            runner = typer.testing.CliRunner()
-            result = runner.invoke(score_cmd, ["--artifacts-dir", os.environ["VEI_ARTIFACTS_DIR"]])
-            if result.exit_code == 0:
-                typer.echo("\nScore:")
-                typer.echo(result.stdout)
-    except Exception:
-        ...
+    if score:
+        try:
+            from vei.cli.vei_score import score as score_cmd
+            import typer.testing
+            if os.environ.get("VEI_ARTIFACTS_DIR"):
+                runner = typer.testing.CliRunner()
+                result = runner.invoke(score_cmd, ["--artifacts-dir", os.environ["VEI_ARTIFACTS_DIR"]])
+                if result.exit_code == 0:
+                    typer.echo("\nScore:")
+                    typer.echo(result.stdout)
+        except Exception:
+            ...
 
 
 if __name__ == "__main__":
