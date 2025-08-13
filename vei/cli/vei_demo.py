@@ -25,7 +25,7 @@ async def _call(session: ClientSession, tool: str, args: dict) -> dict:
     return await session.call_tool(tool, args)
 
 
-def _ensure_sse_available(sse_url: str, autostart: bool) -> None:
+def _ensure_sse_available(sse_url: str, autostart: bool) -> bool:
     def _port_open(host: str, port: int) -> bool:
         import socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -39,17 +39,19 @@ def _ensure_sse_available(sse_url: str, autostart: bool) -> None:
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 3001
     if _port_open(host, port):
-        return
+        return True
     if not autostart:
-        return
+        return False
     env = os.environ.copy()
     env.setdefault("VEI_HOST", host)
     env.setdefault("VEI_PORT", str(port))
     subprocess.Popen(["python", "-m", "vei.router.sse"], env=env)
-    for _ in range(30):
+    # Wait up to ~8 seconds for server to bind
+    for _ in range(80):
         if _port_open(host, port):
-            break
+            return True
         time.sleep(0.1)
+    return False
 
 
 async def _scripted_episode(sse_url: str, max_observes: int = 24) -> list[dict[str, Any]]:
@@ -94,7 +96,10 @@ def run(
     if artifacts_dir:
         os.environ["VEI_ARTIFACTS_DIR"] = str(artifacts_dir)
 
-    _ensure_sse_available(sse_url, autostart)
+    ok = _ensure_sse_available(sse_url, autostart)
+    if not ok:
+        typer.echo(f"Error: SSE server not reachable at {sse_url}. Use --autostart or start it manually (python -m vei.router.sse).", err=True)
+        raise typer.Exit(code=1)
 
     if mode.strip().lower() == "llm":
         from openai import AsyncOpenAI
@@ -131,9 +136,17 @@ def run(
                     transcript.append({"action": {"tool": tool, "args": args, "result": res}})
                     messages.append({"role": "assistant", "content": json.dumps(plan)})
                 return transcript
-        out = asyncio.run(_llm())
+        try:
+            out = asyncio.run(_llm())
+        except Exception as e:
+            typer.echo(f"Error running LLM demo: {e}", err=True)
+            raise typer.Exit(code=1)
     else:
-        out = asyncio.run(_scripted_episode(sse_url))
+        try:
+            out = asyncio.run(_scripted_episode(sse_url))
+        except Exception as e:
+            typer.echo(f"Error running scripted demo: {e}", err=True)
+            raise typer.Exit(code=1)
 
     typer.echo(json.dumps(out, indent=2))
 
