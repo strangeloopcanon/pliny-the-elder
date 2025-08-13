@@ -27,6 +27,9 @@ llm = [
   "openai>=1.55.0",
   "python-dotenv>=1.0.0",
 ]
+rl = [
+  "gymnasium>=0.29.0"
+]
 
 [project.scripts]
 vei-run = "vei.cli.vei_run:app"
@@ -36,6 +39,7 @@ vei-llm-test = "vei.cli.vei_llm_test:app"
 vei-smoke = "vei.cli.vei_smoke:app"
 vei-chat = "vei.cli.vei_chat:app"
 vei-scenarios = "vei.cli.vei_scenarios:app"
+vei-demo = "vei.cli.vei_demo:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
