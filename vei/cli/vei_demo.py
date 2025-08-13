@@ -6,7 +6,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import typer
 try:  # optional dependency; present when installing extras [llm]
@@ -63,16 +63,21 @@ async def _scripted_episode(sse_url: str, max_observes: int = 24) -> list[dict[s
         # Minimal, deterministic policy: read -> slack summary -> compose -> observe until drain
         obs = await _call(s, "vei.observe", {})
         transcript.append({"observation": obs})
+        _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
         res = await _call(s, "browser.read", {})
         transcript.append({"action": {"tool": "browser.read", "args": {}, "result": res}})
+        _append_transcript_line({"action": {"tool": "browser.read", "args": {}, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR"))
         res = await _call(s, "slack.send_message", {"channel": "#procurement", "text": "Summary: budget $3200, citations included."})
         transcript.append({"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}})
+        _append_transcript_line({"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR"))
         res = await _call(s, "mail.compose", {"to": "sales@macrocompute.example", "subj": "Quote request", "body_text": "Please send latest price and ETA."})
         transcript.append({"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}})
+        _append_transcript_line({"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR"))
 
         for _ in range(max_observes):
             obs = await _call(s, "vei.observe", {"focus": "mail"})
             transcript.append({"observation": obs})
+            _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
             pend = obs.get("pending_events", {})
             if pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
                 break
@@ -92,6 +97,7 @@ def run(
     openai_base_url: str | None = typer.Option(None, help="Override OPENAI_BASE_URL"),
     openai_api_key: str | None = typer.Option(None, help="Override OPENAI_API_KEY"),
     score: bool = typer.Option(False, help="Print score summary after transcript"),
+    timeout_s: int = typer.Option(30, help="Per-LLM-call timeout in seconds"),
 ) -> None:
     load_dotenv(override=True)
     if artifacts_dir:
@@ -109,7 +115,10 @@ def run(
             async with sse_client(sse_url) as (read, write):
                 s = ClientSession(read, write)
                 await s.initialize()
-                client = AsyncOpenAI(base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"), api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"))
+                client = AsyncOpenAI(
+                    base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
+                    api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
+                )
                 messages: list[dict] = [{"role": "system", "content": "You control MCP tools. Call vei.observe then choose exactly one tool and JSON args each step."}]
                 if task:
                     messages.append({"role": "user", "content": f"Task: {task}"})
@@ -117,6 +126,7 @@ def run(
                 for i in range(max_steps):
                     obs = await _call(s, "vei.observe", {})
                     transcript.append({"observation": obs})
+                    _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
                     pend = obs.get("pending_events", {})
                     # Only early-stop after at least one step to allow the model to act
                     if i > 0 and pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
@@ -129,7 +139,12 @@ def run(
                         "Reply strictly as JSON {\"tool\": str, \"args\": object}."
                     )
                     messages.append({"role": "user", "content": user})
-                    chat = await client.chat.completions.create(model=model, messages=messages, temperature=0)
+                    chat = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=0,
+                        timeout=timeout_s,
+                    )
                     raw = chat.choices[0].message.content or "{}"
                     try:
                         plan = json.loads(raw) if "{" in raw else {"tool": "vei.observe", "args": {}}
@@ -139,6 +154,7 @@ def run(
                     args = plan.get("args", {})
                     res = await _call(s, tool, args)
                     transcript.append({"action": {"tool": tool, "args": args, "result": res}})
+                    _append_transcript_line({"action": {"tool": tool, "args": args, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR"))
                     messages.append({"role": "assistant", "content": json.dumps(plan)})
 
                     # Auto-drain pending events after key actions to ensure bounded runs
@@ -148,6 +164,7 @@ def run(
                             await _call(s, "vei.tick", {"dt_ms": 20000})
                             obs2 = await _call(s, "vei.observe", {})
                             transcript.append({"observation": obs2})
+                            _append_transcript_line({"observation": obs2}, os.environ.get("VEI_ARTIFACTS_DIR"))
                             p2 = obs2.get("pending_events", {})
                             if p2.get("mail", 0) == 0 and p2.get("slack", 0) == 0:
                                 break
@@ -186,4 +203,13 @@ def run(
 if __name__ == "__main__":
     app()
 
+def _append_transcript_line(entry: dict[str, Any], artifacts_dir: Optional[str]) -> None:
+    if not artifacts_dir:
+        return
+    try:
+        outp = Path(artifacts_dir) / "transcript.jsonl"
+        with open(outp, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    except Exception:
+        ...
 
