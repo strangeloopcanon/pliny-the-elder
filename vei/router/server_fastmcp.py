@@ -80,6 +80,15 @@ class ResetArgs(BaseModel):
     seed: int | None = None
 
 
+class ActAndObserveArgs(BaseModel):
+    tool: str
+    args: dict[str, Any] = {}
+
+
+class TickArgs(BaseModel):
+    dt_ms: int = 1000
+
+
 class _RouterHolder:
     def __init__(self, router: Router):
         self.router = router
@@ -210,17 +219,10 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         holder.router = new_router
         return {"ok": True, "seed": new_seed, "time_ms": new_router.bus.clock_ms}
 
-    class ActAndObserveArgs(BaseModel):
-        tool: str
-        args: dict[str, Any] = {}
-
     @srv.tool(name="vei.act_and_observe", description="Execute a tool and return its result and a post-action observation")
     def vei_act_and_observe(args: ActAndObserveArgs) -> dict[str, Any]:
         data = R().act_and_observe(args.tool, args.args)
         return data
-
-    class TickArgs(BaseModel):
-        dt_ms: int = 1000
 
     @srv.tool(name="vei.tick", description="Advance logical time by dt_ms and deliver due events")
     def vei_tick(args: TickArgs) -> dict[str, Any]:
