@@ -83,6 +83,35 @@ VEI_SSE_URL=http://127.0.0.1:3001/sse \
   --task "Summarize specs, request approval, email vendor." > transcript.json
 ```
 
+### One-command demo
+
+Scripted (no API key):
+```bash
+vei-demo --mode scripted --artifacts-dir /abs/out
+vei-score --artifacts-dir /abs/out
+```
+
+LLM (requires `OPENAI_API_KEY`):
+```bash
+vei-demo --mode llm --model gpt-5 --artifacts-dir /abs/out
+```
+
+### RL environment
+
+Install optional extra and run the example:
+```bash
+pip install -e .[rl]
+python examples/rl_env.py
+```
+
+### Examples
+
+```bash
+python examples/mcp_client_min.py       # minimal MCP client hitting SSE
+python examples/local_router_min.py     # in-process Router loop
+python examples/rl_env.py               # RL wrapper minimal run
+```
+
 ## Configuration
 - **MCP server**: `VEI_HOST`, `VEI_PORT` (defaults `127.0.0.1`, `3001`).
 - **SSE URL**: `VEI_SSE_URL` (default `http://127.0.0.1:3001/sse`).
