@@ -113,11 +113,12 @@ def run(
                 if task:
                     messages.append({"role": "user", "content": f"Task: {task}"})
                 # Simple 1-tool-per-step loop
-                for _ in range(max_steps):
+                for i in range(max_steps):
                     obs = await _call(s, "vei.observe", {})
                     transcript.append({"observation": obs})
                     pend = obs.get("pending_events", {})
-                    if pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
+                    # Only early-stop after at least one step to allow the model to act
+                    if i > 0 and pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
                         break
                     menu = obs.get("action_menu", [])
                     menu_text = "\n".join(f"- {m.get('tool')} {json.dumps(m.get('args', m.get('args_schema', {})))}" for m in menu)
@@ -138,6 +139,19 @@ def run(
                     res = await _call(s, tool, args)
                     transcript.append({"action": {"tool": tool, "args": args, "result": res}})
                     messages.append({"role": "assistant", "content": json.dumps(plan)})
+
+                    # Auto-drain pending events after key actions to ensure bounded runs
+                    if tool in {"mail.compose", "slack.send_message"}:
+                        try:
+                            # Advance time to deliver scheduled events deterministically
+                            await _call(s, "vei.tick", {"dt_ms": 20000})
+                            obs2 = await _call(s, "vei.observe", {})
+                            transcript.append({"observation": obs2})
+                            p2 = obs2.get("pending_events", {})
+                            if p2.get("mail", 0) == 0 and p2.get("slack", 0) == 0:
+                                break
+                        except Exception:
+                            ...
                 return transcript
         try:
             out = asyncio.run(_llm())
