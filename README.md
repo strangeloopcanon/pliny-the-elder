@@ -1,58 +1,141 @@
-VEI (Virtual Enterprise Internet)
+## VEI (Virtual Enterprise Internet)
 
-Fully synthetic, MCP-native Slack/Mail/Browser world. One MCP server exposes tools:
+Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server exposes tools and a seeded event bus so agents can practice multi-app workflows deterministically and reproducibly.
 
-- slack.*: list_channels, open_channel, send_message, react, fetch_thread
-- mail.*: list, open, compose, reply
-- browser.*: open, find, click, type, submit, read, back
-- vei.*: observe, reset (LLM-friendly helpers)
+### Highlights
+- **MCP-native tools**: `slack.*`, `mail.*`, `browser.*`, and `vei.*` helpers.
+- **Deterministic**: seeded event bus for replies/arrivals/interrupts; identical runs for a fixed seed + artifacts.
+- **No external SaaS**: all data is synthetic; live modes can be sandboxed.
 
-Deterministic via seeded event bus. No external SaaS.
+### Architecture
+```
+Agent ──MCP──► VEI Router (this repo)
+                      │
+                      ├─ slack.{live|replay|sim}
+                      ├─ email.{live_local|replay|sim}
+                      └─ browser.{replay|live}
+                               ▲
+                        Seeded Event Bus (async)
+                               ▲
+                     Replay Stores (.mcpz + .wacz/.har)
+```
 
-Quickstart
+### Modes (per connector)
+- **Live**: dev/sandbox endpoints with guardrails.
+- **Replay**: deterministic playback from `.mcpz` and `.wacz`.
+- **Sim**: seeded emulators that speak the same MCP schemas.
 
-1) Install (Python 3.11+)
+## Quickstart
 
+### Install (Python 3.11+)
 ```bash
 pip install -e .
 ```
 
-2) Start the MCP server (SSE recommended)
-
+### Start the MCP server (SSE)
 ```bash
 VEI_SEED=42042 python -m vei.router.sse
 ```
-
 SSE endpoints (FastMCP defaults):
 - Stream: `http://127.0.0.1:3001/sse`
 - Messages: `http://127.0.0.1:3001/messages/`
-Any MCP client can connect. A stdio entry also exists (`python -m vei.router`) but SSE is more robust for automated clients/tests.
 
-Zero-config option: the `vei-llm-test` and `vei-chat` CLIs will auto-start a local SSE server if it is not already running. You can disable this behavior with `--no-autostart`.
+Zero-config: the `vei-llm-test` and `vei-chat` CLIs auto-start a local SSE server if not running (disable with `--no-autostart`).
 
-3) LLM-friendly use
+### LLM-friendly loop
+- Call `vei.observe` to get `{time_ms, focus, summary, action_menu, pending_events}`.
+- Choose one tool from `action_menu` (or any allowed tool) and call it.
+- Repeat; optionally `vei.reset` to restart the episode.
 
-- Minimal loop for an agent:
-  1) Call `vei.observe` to get a compact observation with `action_menu`.
-  2) Pick a tool from `action_menu` (or any allowed tool) and call it once.
-  3) Repeat `vei.observe` → tool call.
-  4) Optionally call `vei.reset` to reset the episode (seeded).
+Examples (MCP):
+- `vei.act_and_observe {"tool":"browser.read","args":{}}`
+- `vei.tick {"dt_ms":15000}`
+- `slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}`
+- `mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}`
 
-- Example tool calls an LLM can issue (MCP):
+### CLI (optional)
+```bash
+vei-run --seed 42042
+# then type tool lines like:
+# browser.read {}
+# slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}
+# mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}
+```
 
-  - `vei.observe {}` → returns `{time_ms, focus, summary, action_menu, pending_events}`
-  - `vei.act_and_observe {"tool":"browser.read","args":{}}` → returns `{result, observation}` (one-step convenience)
-  - `vei.tick {"dt_ms": 15000}` → advance time deterministically and deliver due events
-  - `vei.pending {}` → returns pending event counts without advancing time
-  - `browser.read {}`
-  - `slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}`
-  - `mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}`
-  - `vei.reset {"seed":42042}` (optional)
+### LLM smoke test (uses `.env` `OPENAI_API_KEY`)
+Recommended:
+```bash
+VEI_SSE_URL=http://127.0.0.1:3001/sse \
+  vei-llm-test --model gpt-5 \
+  --task "Research product price, get Slack approval < $3200, email vendor for a quote." > transcript.json
+```
+Manual server:
+```bash
+VEI_SEED=42042 python -m vei.router.sse &
+VEI_SSE_URL=http://127.0.0.1:3001/sse vei-llm-test --model gpt-5 > transcript.json
+```
 
-MCP config
+### Playground
+```bash
+pip install -e .
+VEI_SSE_URL=http://127.0.0.1:3001/sse \
+  vei-chat --model gpt-5 --max-steps 12 \
+  --task "Summarize specs, request approval, email vendor." > transcript.json
+```
 
+## Configuration
+- **MCP server**: `VEI_HOST`, `VEI_PORT` (defaults `127.0.0.1`, `3001`).
+- **SSE URL**: `VEI_SSE_URL` (default `http://127.0.0.1:3001/sse`).
+- **Artifacts**: `VEI_ARTIFACTS_DIR=/abs/out` writes `trace.jsonl`.
+- **Streaming**: `VEI_TRACE_POST_URL=https://collector.example/trace` streams entries (best-effort POST).
+- **Scenarios**: `VEI_SCENARIO_NAME`, or `VEI_SCENARIO_FILE=/abs/scenario.json`, or `VEI_SCENARIO_JSON='{"budget_cap_usd":3200,...}'`.
+- **OpenAI-compatible routing**: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`.
+- **CLI overrides**: `--openai-base-url`, `--openai-api-key`.
+- **Autostart**: set `VEI_DISABLE_AUTOSTART=1` to prevent background SSE startup.
+
+See `.env.example` for a starter template.
+
+## MCP tools
+- `slack.*`: `list_channels`, `open_channel`, `send_message`, `react`, `fetch_thread`.
+- `mail.*`: `list`, `open`, `compose`, `reply`.
+- `browser.*`: `open`, `find`, `click`, `type`, `submit`, `read`, `back`.
+- `vei.*` helpers: `observe`, `act_and_observe`, `tick`, `pending`, `reset`.
+
+## Deterministic replay
+- Fixed seed + fixed artifacts + fixed build ⇒ identical tool payloads, event timings, DOM hashes, and screenshots.
+- Two layers:
+  - Tools replay via `.mcpz` bundles (tool calls, responses, timings).
+  - Browser replay via `.wacz` web archives and a DOM-graph (state = node, edge = affordance alias).
+
+## Artifacts and scoring
+- Set `VEI_ARTIFACTS_DIR` or pass `--artifacts-dir` to write `trace.jsonl`.
+- Score a run:
+```bash
+vei-score --artifacts-dir /abs/path/out
+# or stricter success requiring all subgoals:
+vei-score --artifacts-dir /abs/path/out --success-mode full
+```
+Score object captures terminal success, subgoals, costs, provenance, and artifact hashes.
+
+## Scenarios
+- Built-in names (set `VEI_SCENARIO_NAME`):
+  - `macrocompute_default` — minimal world (home → pdp → specs).
+  - `extended_store` — adds a category page with two products.
+- Provide your own via `VEI_SCENARIO_FILE` or `VEI_SCENARIO_JSON`.
+
+## Test plan (must pass)
+- Replay determinism across runs (same seed).
+- Event determinism for Slack/Mail.
+- Invalid action handling is deterministic.
+- Scoring robust to common email quoting/casing variations.
+
+## Safety & compliance
+- No external PII; all fixtures synthetic.
+- Live browser respects domain whitelist and blocks POST.
+- Slack live is for dev workspaces only; rate-limited.
+
+## MCP config snippet
 `mcp.json` is included:
-
 ```json
 {
   "servers": {
@@ -65,109 +148,5 @@ MCP config
 }
 ```
 
-CLI (optional)
-
-```bash
-vei-run --seed 42042
-# then type tool lines like:
-# browser.read {}
-# slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}
-# mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}
-```
-
-LLM smoke test (uses .env OPENAI_API_KEY)
-
-Recommended (auto-starts server if needed):
-```bash
-VEI_SSE_URL=http://127.0.0.1:3001/sse vei-llm-test --model gpt-5 --task "Research product price, get Slack approval < $3200, email vendor for a quote." > transcript.json
-```
-
-Alternatively (manual server):
-```bash
-VEI_SEED=42042 python -m vei.router.sse &
-VEI_SSE_URL=http://127.0.0.1:3001/sse vei-llm-test --model gpt-5 > transcript.json
-```
-
-The CLI connects to the MCP SSE server and has the LLM follow the observe → plan → act loop via MCP tools using your chosen model.
-
-Playground (interactive GPT-5 loop)
-
-```bash
-pip install -e .
-VEI_SSE_URL=http://127.0.0.1:3001/sse vei-chat --model gpt-5 --max-steps 12 --task "Summarize specs, request approval, email vendor." > transcript.json
-```
-
-Tips
-- Use `vei.help {}` and `vei.ping {}` from any MCP client to discover tools and confirm health.
-- Set `VEI_ARTIFACTS_DIR=/abs/out` before starting the server to produce a `trace.jsonl`; then `vei-score --artifacts-dir /abs/out`.
-
-Server autostart
-- Importing this package starts an SSE server in the background by default (sitecustomize) to make local use frictionless.
-- Opt out by setting `VEI_DISABLE_AUTOSTART=1` if you embed VEI in a larger app or test harness and want explicit control.
- - The `vei-llm-test` and `vei-chat` CLIs also auto-start the SSE server if it is not detected on `VEI_SSE_URL` (use `--no-autostart` to disable).
-
-Configuration (succinct)
-- MCP server host/port: `VEI_HOST`, `VEI_PORT` (defaults `127.0.0.1`, `3001`).
-- MCP SSE URL for clients: `VEI_SSE_URL` (default `http://127.0.0.1:3001/sse`).
-- Trace output dir: `VEI_ARTIFACTS_DIR=/abs/out` writes `trace.jsonl`.
-- Trace streaming: optional `VEI_TRACE_POST_URL=https://collector.example/trace` streams each entry as JSON via POST.
-- OpenAI SDK routing: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL` for OpenAI-compatible gateways.
-- CLI overrides: `vei-llm-test` and `vei-chat` accept `--openai-base-url` and `--openai-api-key`.
-- Scenario config (optional): set `VEI_SCENARIO_FILE=/abs/scenario.json` or `VEI_SCENARIO_JSON='{"budget_cap_usd":3200,...}'` to customize Slack/Mail/Browser world.
-
-Exact LLM call sites
-- `vei/cli/vei_llm_test.py` at the call to `client.chat.completions.create(...)`.
-- `vei/cli/_llm_loop.py` at the call to `client.chat.completions.create(...)`.
-
-Exact MCP endpoints
-- Server created in `vei/router/server_fastmcp.py` with FastMCP defaults (`/sse`, `/messages/`).
-- SSE runner in `vei/router/sse.py` uses those defaults and runs `server.run("sse")`.
-
-Routing models to your environment
-- Set `OPENAI_BASE_URL=https://your-openai-compatible-gateway/v1` and `OPENAI_API_KEY=...`.
-- Or pass via CLI: `vei-llm-test --openai-base-url ... --openai-api-key ...`.
-
-Passing a task to the LLM
-- Both CLIs accept `--task "..."`. This adds a preface message like `Task: ...` so the model sequences MCP actions toward your goal.
-
-Examples:
-```bash
-vei-llm-test --model gpt-5 --task "Read product page, post Slack approval summary, email vendor, wait for reply."
-vei-chat --model gpt-5 --task "Under $3200, get approval with citations and parse the vendor's ETA." --max-steps 12
-```
-
-Telemetry
-- Persistent file: set `VEI_ARTIFACTS_DIR` to store `trace.jsonl`.
-- Streaming: set `VEI_TRACE_POST_URL` to POST each entry (best-effort, non-blocking).
-
-Artifacts and scoring
-
-- Set `VEI_ARTIFACTS_DIR` or pass `--artifacts-dir` to write a `trace.jsonl`.
-- Score a run:
-
-```bash
-vei-score --artifacts-dir /abs/path/out
-# or stricter success requiring all subgoals:
-vei-score --artifacts-dir /abs/path/out --success-mode full
-```
-
-Config and Notes
-
-- Determinism: LCG RNG + logical bus clock; set `VEI_SEED` for reproducibility.
-- Slack approval policy env: `VEI_BUDGET_CAP` (default 3500), derail rate `VEI_SLACK_DERAIL_PCT` (default 0.1).
-- SSE URL override for tools/tests: `VEI_SSE_URL` (default `http://127.0.0.1:3001/sse`).
-- Safety: all data is synthetic; no external services are contacted.
-- Autostart: set `VEI_DISABLE_AUTOSTART=1` to prevent background SSE startup.
-
-Scenarios catalog
-- Built-in names (set `VEI_SCENARIO_NAME`):
-  - `macrocompute_default` — default minimal world (home → pdp → specs), standard Slack/Mail behavior.
-  - `extended_store` — adds a category page with two products (pdp1, pdp2) and deeper browser navigation.
-- Alternatively, provide your own scenario via:
-  - `VEI_SCENARIO_FILE=/abs/scenario.json` (see `vei-build-scenario` for a template), or
-  - `VEI_SCENARIO_JSON='{"budget_cap_usd":3200,...}'`.
-
-
-Status
-
+## Status
 Minimal runnable slice with deterministic Slack/Mail events and a simple virtual site. Extend scenarios under `vei/world/`.
