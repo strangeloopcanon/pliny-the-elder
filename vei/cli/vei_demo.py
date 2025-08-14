@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - fallback when not installed
 
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
+from ._llm_loop import extract_plan  # robust JSON extraction (handles ```json blocks)
 
 app = typer.Typer(add_completion=False)
 
@@ -45,6 +46,11 @@ def _ensure_sse_available(sse_url: str, autostart: bool) -> bool:
     env = os.environ.copy()
     env.setdefault("VEI_HOST", host)
     env.setdefault("VEI_PORT", str(port))
+    # Propagate artifacts/scenario to the spawned server so traces are written
+    for key in ("VEI_ARTIFACTS_DIR", "VEI_SCENARIO_NAME", "VEI_SCENARIO_FILE", "VEI_SCENARIO_JSON"):
+        val = os.environ.get(key)
+        if val:
+            env[key] = val
     subprocess.Popen(["python", "-m", "vei.router.sse"], env=env)
     # Wait up to ~8 seconds for server to bind
     for _ in range(80):
@@ -97,6 +103,8 @@ def run(
     openai_base_url: str | None = typer.Option(None, help="Override OPENAI_BASE_URL"),
     openai_api_key: str | None = typer.Option(None, help="Override OPENAI_API_KEY"),
     score: bool = typer.Option(False, help="Print score summary after transcript"),
+    verbose: bool = typer.Option(False, help="Print step-by-step progress to stdout"),
+    transcript_out: Optional[Path] = typer.Option(None, help="Optional path to write final transcript.json"),
     timeout_s: int = typer.Option(30, help="Per-LLM-call timeout in seconds"),
 ) -> None:
     load_dotenv(override=True)
@@ -127,6 +135,8 @@ def run(
                     obs = await _call(s, "vei.observe", {})
                     transcript.append({"observation": obs})
                     _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                    _print_observation(verbose, obs)
+                    _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
                     pend = obs.get("pending_events", {})
                     # Only early-stop after at least one step to allow the model to act
                     if i > 0 and pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
@@ -146,14 +156,13 @@ def run(
                         timeout=timeout_s,
                     )
                     raw = chat.choices[0].message.content or "{}"
-                    try:
-                        plan = json.loads(raw) if "{" in raw else {"tool": "vei.observe", "args": {}}
-                    except Exception:
-                        plan = {"tool": "vei.observe", "args": {}}
+                    plan = extract_plan(raw, default_tool="vei.observe")
                     tool = plan.get("tool", "vei.observe")
                     args = plan.get("args", {})
                     res = await _call(s, tool, args)
                     transcript.append({"action": {"tool": tool, "args": args, "result": res}})
+                    _append_transcript_line({"action": {"tool": tool, "args": args, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                    _print_action(verbose, tool, args, res)
                     _append_transcript_line({"action": {"tool": tool, "args": args, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR"))
                     messages.append({"role": "assistant", "content": json.dumps(plan)})
 
@@ -165,6 +174,7 @@ def run(
                             obs2 = await _call(s, "vei.observe", {})
                             transcript.append({"observation": obs2})
                             _append_transcript_line({"observation": obs2}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                            _print_observation(verbose, obs2)
                             p2 = obs2.get("pending_events", {})
                             if p2.get("mail", 0) == 0 and p2.get("slack", 0) == 0:
                                 break
@@ -179,11 +189,26 @@ def run(
     else:
         try:
             out = asyncio.run(_scripted_episode(sse_url))
+            # Also print scripted progress if requested
+            if verbose:
+                for entry in out:
+                    if "observation" in entry:
+                        _print_observation(True, entry["observation"])  # always print
+                    if "action" in entry:
+                        a = entry["action"]
+                        _print_action(True, a.get("tool"), a.get("args", {}), a.get("result"))
         except Exception as e:
             typer.echo(f"Error running scripted demo: {e}", err=True)
             raise typer.Exit(code=1)
 
-    typer.echo(json.dumps(out, indent=2))
+    # Emit final transcript
+    final_json = json.dumps(out, indent=2)
+    typer.echo(final_json)
+    if transcript_out:
+        try:
+            Path(transcript_out).write_text(final_json, encoding="utf-8")
+        except Exception:
+            ...
 
     # If we captured artifacts, try to score
     if score:
@@ -212,4 +237,27 @@ def _append_transcript_line(entry: dict[str, Any], artifacts_dir: Optional[str])
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
     except Exception:
         ...
+
+
+def _print_observation(verbose: bool, obs: dict[str, Any]) -> None:
+    if not verbose:
+        return
+    summary = obs.get("summary")
+    pending = obs.get("pending_events")
+    focus = obs.get("focus")
+    typer.echo(f"OBS focus={focus} pending={pending} summary={summary}")
+
+
+def _print_action(verbose: bool, tool: Optional[str], args: dict[str, Any], result: Any) -> None:
+    if not verbose:
+        return
+    try:
+        args_s = json.dumps(args, separators=(",", ":"))
+    except Exception:
+        args_s = str(args)
+    # Keep result compact for readability
+    compact = result
+    if isinstance(result, dict):
+        compact = {k: result[k] for k in list(result.keys())[:3]}
+    typer.echo(f"ACT {tool} args={args_s} result~={compact}")
 
