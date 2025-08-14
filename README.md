@@ -2,6 +2,8 @@
 
 Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server exposes tools and a seeded event bus so agents can practice multi-app workflows deterministically and reproducibly.
 
+<!-- Demo branch change for GitHub workflow demonstration -->
+
 ### Highlights
 - **MCP-native tools**: `slack.*`, `mail.*`, `browser.*`, and `vei.*` helpers.
 - **Deterministic**: seeded event bus for replies/arrivals/interrupts; identical runs for a fixed seed + artifacts.
@@ -27,20 +29,68 @@ Agent ──MCP──► VEI Router (this repo)
 
 ## Quickstart
 
-### Install (Python 3.11+)
+### Prerequisites
+- Python 3.11+
+- OpenAI API key with access to `gpt-5`
+
+### Install
 ```bash
-pip install -e .
+pip install -e ".[llm,browser]"
 ```
 
-### Start the MCP server (SSE)
+### Configure
+Create a `.env` at the repo root:
+```env
+# Required
+OPENAI_API_KEY=sk-your-actual-api-key-here
+
+# Optional
+# OPENAI_BASE_URL=https://api.openai.com/v1
+
+# VEI configuration
+VEI_SSE_URL=http://127.0.0.1:3001/sse
+VEI_SEED=42042
+VEI_ARTIFACTS_DIR=./_vei_out
+```
+
+### Verify setup
+```bash
+python test_vei_setup.py
+```
+You should see “All critical checks passed!”. The SSE server may show as “Not running”; it auto-starts when you run a demo.
+
+### Run the demo
+- Option A: Demo script
+```bash
+python run_vei_gpt5_demo.py
+```
+
+- Option B: VEI CLI tools
+```bash
+# Interactive chat
+vei-chat --model gpt-5 --max-steps 15
+
+# Automated test
+vei-llm-test --model gpt-5 \
+  --task "Research product price, get Slack approval < $3200, email vendor for a quote."
+
+# One-command demo with artifacts
+vei-demo --mode llm --model gpt-5 --artifacts-dir ./_vei_out/demo_run
+```
+
+- Option C: Agents SDK
+```bash
+python examples/agents_gpt5_vei_sse.py
+python examples/agents_gpt5_vei_stdio.py
+```
+
+### Start the MCP server (manual, optional)
 ```bash
 VEI_SEED=42042 python -m vei.router.sse
 ```
 SSE endpoints (FastMCP defaults):
 - Stream: `http://127.0.0.1:3001/sse`
 - Messages: `http://127.0.0.1:3001/messages/`
-
-Zero-config: the `vei-llm-test` and `vei-chat` CLIs auto-start a local SSE server if not running (disable with `--no-autostart`).
 
 ### LLM-friendly loop
 - Call `vei.observe` to get `{time_ms, focus, summary, action_menu, pending_events}`.
@@ -52,49 +102,6 @@ Examples (MCP):
 - `vei.tick {"dt_ms":15000}`
 - `slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}`
 - `mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}`
-
-### CLI (optional)
-```bash
-vei-run --seed 42042
-# then type tool lines like:
-# browser.read {}
-# slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}
-# mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}
-```
-
-### LLM smoke test (uses `.env` `OPENAI_API_KEY`)
-Recommended:
-```bash
-VEI_SSE_URL=http://127.0.0.1:3001/sse \
-  vei-llm-test --model gpt-5 \
-  --task "Research product price, get Slack approval < $3200, email vendor for a quote." > transcript.json
-```
-Manual server:
-```bash
-VEI_SEED=42042 python -m vei.router.sse &
-VEI_SSE_URL=http://127.0.0.1:3001/sse vei-llm-test --model gpt-5 > transcript.json
-```
-
-### Playground
-```bash
-pip install -e .
-VEI_SSE_URL=http://127.0.0.1:3001/sse \
-  vei-chat --model gpt-5 --max-steps 12 \
-  --task "Summarize specs, request approval, email vendor." > transcript.json
-```
-
-### One-command demo
-
-Scripted (no API key):
-```bash
-vei-demo --mode scripted --artifacts-dir /abs/out
-vei-score --artifacts-dir /abs/out
-```
-
-LLM (requires `OPENAI_API_KEY`):
-```bash
-vei-demo --mode llm --model gpt-5 --artifacts-dir /abs/out
-```
 
 ### RL environment
 
@@ -122,8 +129,6 @@ python examples/rl_env.py               # RL wrapper minimal run
 - **CLI overrides**: `--openai-base-url`, `--openai-api-key`.
 - **Autostart**: set `VEI_DISABLE_AUTOSTART=1` to prevent background SSE startup.
 
-See `.env.example` for a starter template.
-
 ## MCP tools
 - `slack.*`: `list_channels`, `open_channel`, `send_message`, `react`, `fetch_thread`.
 - `mail.*`: `list`, `open`, `compose`, `reply`.
@@ -136,21 +141,54 @@ See `.env.example` for a starter template.
   - Tools replay via `.mcpz` bundles (tool calls, responses, timings).
   - Browser replay via `.wacz` web archives and a DOM-graph (state = node, edge = affordance alias).
 
-## Artifacts and scoring
-- Set `VEI_ARTIFACTS_DIR` or pass `--artifacts-dir` to write `trace.jsonl`.
-- Score a run:
-```bash
-vei-score --artifacts-dir /abs/path/out
-# or stricter success requiring all subgoals:
-vei-score --artifacts-dir /abs/path/out --success-mode full
+## Logging and evaluation
+
+### Artifacts directory
+After each run, check the artifacts directory:
 ```
-Score object captures terminal success, subgoals, costs, provenance, and artifact hashes.
+_vei_out/run_TIMESTAMP/
+├── transcript.json     # Full conversation log
+├── transcript.jsonl    # Line-by-line events
+└── trace.jsonl         # Detailed execution trace
+```
+
+### Scoring
+```bash
+vei-score --artifacts-dir ./_vei_out/run_20240115_143022
+```
+Evaluates task completion, subgoals, costs (action count), provenance, and constraint compliance.
 
 ## Scenarios
 - Built-in names (set `VEI_SCENARIO_NAME`):
   - `macrocompute_default` — minimal world (home → pdp → specs).
   - `extended_store` — adds a category page with two products.
 - Provide your own via `VEI_SCENARIO_FILE` or `VEI_SCENARIO_JSON`.
+
+### Advanced usage
+- Custom scenarios via env/file:
+```bash
+export VEI_SCENARIO_JSON='{"budget_cap_usd": 5000, "products": [...]}'
+export VEI_SCENARIO_FILE=/path/to/scenario.json
+```
+- Deterministic runs:
+```bash
+export VEI_SEED=12345
+vei-demo --mode llm --artifacts-dir ./run1
+export VEI_SEED=12345
+vei-demo --mode llm --artifacts-dir ./run2
+# diff run1/transcript.json run2/transcript.json
+```
+- Stream traces:
+```bash
+export VEI_TRACE_POST_URL=https://your-collector.com/endpoint
+```
+
+### Best practices
+- Start simple → then scale to complex workflows
+- Always set `VEI_ARTIFACTS_DIR`/`--artifacts-dir` for debugging
+- Use `vei-score` to validate completion
+- Fix the seed for reproducibility
+- Monitor `transcript.jsonl` for real-time events
 
 ## Test plan (must pass)
 - Replay determinism across runs (same seed).
