@@ -68,8 +68,13 @@ node_modules/
 
 # VEI artifacts and traces
 _vei_out/
+vei_out/
 **/artifacts/**
 **/trace.jsonl
+_artifacts/
+.artifacts/
+**/_artifacts/**
+**/.artifacts/**
 
 # OneDrive/temporary
 ~$*
@@ -178,3 +183,4 @@ venv.bak/
 ehthumbs.db
 # Project specific
 *.log 
+_vei_out/
