@@ -4,10 +4,9 @@ import os
 from typing import Any
 
 from mcp.server.fastmcp import server as fserver
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .core import Router, MCPError
-from vei.world.scenario import Scenario
 
 
 class SlackOpenArgs(BaseModel):
@@ -82,7 +81,8 @@ class ResetArgs(BaseModel):
 
 class ActAndObserveArgs(BaseModel):
     tool: str
-    args: dict[str, Any] = {}
+    # Avoid shared mutable defaults across requests
+    args: dict[str, Any] = Field(default_factory=dict)
 
 
 class TickArgs(BaseModel):
@@ -104,12 +104,28 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         except ValueError:
             port = 3001
 
+    # Honor logging and debug via env so diagnostics show up
+    log_level = os.environ.get("FASTMCP_LOG_LEVEL", "INFO").upper()
+    debug_flag = os.environ.get("FASTMCP_DEBUG", "0") in {"1", "true", "TRUE", "yes", "on"}
+
+    # Relax transport security for local dev if explicitly requested
+    ts = None
+    if os.environ.get("FASTMCP_DISABLE_SECURITY") in {"1", "true", "TRUE", "yes", "on"}:
+        try:
+            from mcp.server.fastmcp.server import TransportSecuritySettings  # type: ignore
+            ts = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+        except Exception:
+            ts = None
+
     srv = fserver.FastMCP(
         name="VEI Router",
         instructions="Virtual Enterprise Internet — synthetic MCP world",
         host=host,
         port=port,
         mount_path=mount_path,
+        log_level=log_level,  # ensure FastMCP logging reflects env
+        debug=debug_flag,
+        transport_security=ts,
     )
     holder = _RouterHolder(router)
 
@@ -122,77 +138,77 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         return R().call_and_step("slack.list_channels", {})  # type: ignore[return-value]
 
     @srv.tool(name="slack.open_channel", description="Open a Slack channel")
-    def slack_open_channel(args: SlackOpenArgs) -> dict[str, Any]:
+    def slack_open_channel(channel: str) -> dict[str, Any]:
         try:
-            return R().call_and_step("slack.open_channel", args.model_dump())
+            return R().call_and_step("slack.open_channel", {"channel": channel})
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="slack.send_message", description="Send a Slack message")
-    def slack_send_message(args: SlackSendArgs) -> dict[str, Any]:
+    def slack_send_message(channel: str, text: str, thread_ts: str | None = None) -> dict[str, Any]:
         try:
-            return R().call_and_step("slack.send_message", args.model_dump())
+            return R().call_and_step("slack.send_message", {"channel": channel, "text": text, "thread_ts": thread_ts})
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="slack.react", description="React to a message")
-    def slack_react(args: SlackReactArgs) -> dict[str, Any]:
+    def slack_react(channel: str, ts: str, emoji: str) -> dict[str, Any]:
         try:
-            return R().call_and_step("slack.react", args.model_dump())
+            return R().call_and_step("slack.react", {"channel": channel, "ts": ts, "emoji": emoji})
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="slack.fetch_thread", description="Fetch a thread")
-    def slack_fetch_thread(args: SlackFetchThreadArgs) -> dict[str, Any]:
+    def slack_fetch_thread(channel: str, thread_ts: str) -> dict[str, Any]:
         try:
-            return R().call_and_step("slack.fetch_thread", args.model_dump())
+            return R().call_and_step("slack.fetch_thread", {"channel": channel, "thread_ts": thread_ts})
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="mail.list", description="List mail folder")
-    def mail_list(args: MailListArgs) -> list[dict[str, Any]]:
-        return R().call_and_step("mail.list", args.model_dump())  # type: ignore[return-value]
+    def mail_list(folder: str = "INBOX") -> list[dict[str, Any]]:
+        return R().call_and_step("mail.list", {"folder": folder})  # type: ignore[return-value]
 
     @srv.tool(name="mail.open", description="Open a message")
-    def mail_open(args: MailOpenArgs) -> dict[str, Any]:
+    def mail_open(id: str) -> dict[str, Any]:
         try:
-            return R().call_and_step("mail.open", args.model_dump())
+            return R().call_and_step("mail.open", {"id": id})
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="mail.compose", description="Compose a message")
-    def mail_compose(args: MailComposeArgs) -> dict[str, Any]:
-        return R().call_and_step("mail.compose", args.model_dump())
+    def mail_compose(to: str, subj: str, body_text: str) -> dict[str, Any]:
+        return R().call_and_step("mail.compose", {"to": to, "subj": subj, "body_text": body_text})
 
     @srv.tool(name="mail.reply", description="Reply to a message")
-    def mail_reply(args: MailReplyArgs) -> dict[str, Any]:
+    def mail_reply(id: str, body_text: str) -> dict[str, Any]:
         try:
-            return R().call_and_step("mail.reply", args.model_dump())
+            return R().call_and_step("mail.reply", {"id": id, "body_text": body_text})
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="browser.open", description="Open a URL")
-    def browser_open(args: BrowserOpenArgs) -> dict[str, Any]:
-        return R().call_and_step("browser.open", args.model_dump())
+    def browser_open(url: str) -> dict[str, Any]:
+        return R().call_and_step("browser.open", {"url": url})
 
     @srv.tool(name="browser.find", description="Find visible affordances")
-    def browser_find(args: BrowserFindArgs) -> dict[str, Any]:
-        return R().call_and_step("browser.find", args.model_dump())
+    def browser_find(query: str, top_k: int = 10) -> dict[str, Any]:
+        return R().call_and_step("browser.find", {"query": query, "top_k": top_k})
 
     @srv.tool(name="browser.click", description="Click an affordance")
-    def browser_click(args: BrowserClickArgs) -> dict[str, Any]:
+    def browser_click(node_id: str) -> dict[str, Any]:
         try:
-            return R().call_and_step("browser.click", args.model_dump())
+            return R().call_and_step("browser.click", {"node_id": node_id})
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="browser.type", description="Type into a field")
-    def browser_type(args: BrowserTypeArgs) -> dict[str, Any]:
-        return R().call_and_step("browser.type", args.model_dump())
+    def browser_type(node_id: str, text: str) -> dict[str, Any]:
+        return R().call_and_step("browser.type", {"node_id": node_id, "text": text})
 
     @srv.tool(name="browser.submit", description="Submit a form")
-    def browser_submit(args: BrowserSubmitArgs) -> dict[str, Any]:
-        return R().call_and_step("browser.submit", args.model_dump())
+    def browser_submit(form_id: str) -> dict[str, Any]:
+        return R().call_and_step("browser.submit", {"form_id": form_id})
 
     @srv.tool(name="browser.read", description="Read current page")
     def browser_read() -> dict[str, Any]:
@@ -214,19 +230,19 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
     def vei_reset(seed: int | None = None) -> dict[str, Any]:
         old = R()
         new_seed = int(seed) if seed is not None else int(os.environ.get("VEI_SEED", "42042"))
-        # Preserve scenario and artifacts configuration
+        # Preserve scenario and artifacts configuration so the environment stays consistent for the session
         new_router = Router(seed=new_seed, artifacts_dir=old.trace.out_dir, scenario=old.scenario)
         holder.router = new_router
         return {"ok": True, "seed": new_seed, "time_ms": new_router.bus.clock_ms}
 
     @srv.tool(name="vei.act_and_observe", description="Execute a tool and return its result and a post-action observation")
-    def vei_act_and_observe(args: ActAndObserveArgs) -> dict[str, Any]:
-        data = R().act_and_observe(args.tool, args.args)
+    def vei_act_and_observe(tool: str, args: dict[str, Any] = Field(default_factory=dict)) -> dict[str, Any]:
+        data = R().act_and_observe(tool, args)
         return data
 
     @srv.tool(name="vei.tick", description="Advance logical time by dt_ms and deliver due events")
-    def vei_tick(args: TickArgs) -> dict[str, Any]:
-        return R().tick(args.dt_ms)
+    def vei_tick(dt_ms: int = 1000) -> dict[str, Any]:
+        return R().tick(dt_ms)
 
     @srv.tool(name="vei.pending", description="Return pending event counts without advancing time")
     def vei_pending() -> dict[str, int]:
@@ -274,20 +290,5 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
                 {"tool": "vei.act_and_observe", "args": {"tool": "browser.read", "args": {}}},
             ],
         }
-
-    return srv
-
-    @srv.tool(name="vei.ping", description="Health check; returns ok and current logical time")
-    def vei_ping() -> dict[str, Any]:
-        return {"ok": True, "time_ms": R().bus.clock_ms}
-
-    @srv.tool(name="vei.reset", description="Reset episode state; optionally supply a seed")
-    def vei_reset(seed: int | None = None) -> dict[str, Any]:
-        seed = seed if seed is not None else int(os.environ.get("VEI_SEED", "42042"))
-        art = os.environ.get("VEI_ARTIFACTS_DIR")
-        # Preserve scenario across resets
-        scenario = holder.router.scenario if hasattr(holder.router, "scenario") else None
-        holder.router = Router(seed=seed, artifacts_dir=art, scenario=scenario)
-        return {"ok": True, "seed": seed}
 
     return srv

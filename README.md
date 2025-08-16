@@ -35,7 +35,7 @@ Agent ──MCP──► VEI Router (this repo)
 
 ### Install
 ```bash
-pip install -e ".[llm,browser]"
+pip install -e ".[llm,browser,sse]"
 ```
 
 ### Configure
@@ -59,6 +59,19 @@ python test_vei_setup.py
 ```
 You should see “All critical checks passed!”. The SSE server may show as “Not running”; it auto-starts when you run a demo.
 
+### Transport smoke tests (MCP stdio and SSE)
+Quick end-to-end checks without an API key:
+```bash
+# StdIO MCP transport (spawns python -m vei.router)
+vei-smoke --transport stdio --timeout-s 30
+
+# SSE MCP transport (auto-starts python -m vei.router.sse if needed)
+vei-smoke --transport sse --timeout-s 30
+
+# Or via a Python script that runs both and falls back to a direct Router test
+python tests/test_vei_transports.py
+```
+
 ### Run the demo
 - Option A: Demo script
 ```bash
@@ -67,8 +80,9 @@ python run_vei_gpt5_demo.py
 
 - Option B: VEI CLI tools
 ```bash
-# Interactive chat
+# Interactive chat (SSE by default). Use stdio if SSE is blocked or for local dev.
 vei-chat --model gpt-5 --max-steps 15
+vei-chat --model gpt-5 --max-steps 15 --transport stdio --timeout-s 45
 
 # Automated test
 vei-llm-test --model gpt-5 \
@@ -76,13 +90,10 @@ vei-llm-test --model gpt-5 \
 
 # One-command demo with artifacts
 vei-demo --mode llm --model gpt-5 --artifacts-dir ./_vei_out/demo_run
+vei-demo --mode llm --transport stdio --model gpt-5 --artifacts-dir ./_vei_out/demo_run
 ```
 
-- Option C: Agents SDK
-```bash
-python examples/agents_gpt5_vei_sse.py
-python examples/agents_gpt5_vei_stdio.py
-```
+ 
 
 ### Start the MCP server (manual, optional)
 ```bash
@@ -91,6 +102,13 @@ VEI_SEED=42042 python -m vei.router.sse
 SSE endpoints (FastMCP defaults):
 - Stream: `http://127.0.0.1:3001/sse`
 - Messages: `http://127.0.0.1:3001/messages/`
+
+Troubleshooting:
+- Ensure `uvicorn` is installed (covered by the `[sse]` extra).
+- Set `VEI_HOST`/`VEI_PORT` if 3001 is busy.
+- Increase server logs with `FASTMCP_LOG_LEVEL=DEBUG`.
+- If autostart fails silently, check `_vei_out/sse_autostart.log` for errors.
+- If your shell mangles `$` in tasks, quote or escape it (e.g., `"<$3200"` or `\$3200`).
 
 ### LLM-friendly loop
 - Call `vei.observe` to get `{time_ms, focus, summary, action_menu, pending_events}`.
@@ -103,31 +121,30 @@ Examples (MCP):
 - `slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}`
 - `mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}`
 
-### RL environment
-
-Install optional extra and run the example:
-```bash
-pip install -e .[rl]
-python examples/rl_env.py
-```
+ 
 
 ### Examples
 
 ```bash
-python examples/mcp_client_min.py       # minimal MCP client hitting SSE
 python examples/local_router_min.py     # in-process Router loop
-python examples/rl_env.py               # RL wrapper minimal run
+python examples/mcp_client_stdio_min.py # minimal MCP client over stdio
+python examples/llm_stdio_min.py        # minimal live LLM loop over stdio (no SSE)
 ```
 
 ## Configuration
 - **MCP server**: `VEI_HOST`, `VEI_PORT` (defaults `127.0.0.1`, `3001`).
 - **SSE URL**: `VEI_SSE_URL` (default `http://127.0.0.1:3001/sse`).
 - **Artifacts**: `VEI_ARTIFACTS_DIR=/abs/out` writes `trace.jsonl`.
+- **Transcript**: `VEI_TRANSCRIPT_OUT=/abs/transcript.json` to save transcript JSON (used by `examples/llm_stdio_min.py`).
 - **Streaming**: `VEI_TRACE_POST_URL=https://collector.example/trace` streams entries (best-effort POST).
 - **Scenarios**: `VEI_SCENARIO_NAME`, or `VEI_SCENARIO_FILE=/abs/scenario.json`, or `VEI_SCENARIO_JSON='{"budget_cap_usd":3200,...}'`.
 - **OpenAI-compatible routing**: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`.
 - **CLI overrides**: `--openai-base-url`, `--openai-api-key`.
 - **Autostart**: set `VEI_DISABLE_AUTOSTART=1` to prevent background SSE startup.
+
+### Transports: stdio vs SSE
+- **Stdio (recommended for local/CI)**: No open ports, same tools/capabilities. Use `--transport stdio` with CLI or run `examples/llm_stdio_min.py`.
+- **SSE (optional)**: Needed only for HTTP-based clients or remote hosting. Default endpoints `/sse` and `/messages/`.
 
 ## MCP tools
 - `slack.*`: `list_channels`, `open_channel`, `send_message`, `react`, `fetch_thread`.
@@ -205,15 +222,35 @@ export VEI_TRACE_POST_URL=https://your-collector.com/endpoint
 `mcp.json` is included:
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "vei": {
-      "command": "python3",
-      "args": ["-m", "vei.router"],
-      "env": { "VEI_SEED": "42042" }
+      "transport": {
+        "type": "stdio",
+        "command": "python3",
+        "args": ["-m", "vei.router"],
+        "env": { "VEI_SEED": "42042" }
+      }
     }
   }
 }
 ```
+
+To expose the server over SSE instead, start `python3 -m vei.router.sse`
+and point an `sse` transport at `http://127.0.0.1:3001/sse`.
+
+### Common SSE Issues
+- Client hangs connecting → server not running. Start it manually or use tools that auto-start (e.g. `vei-chat`, `vei-smoke --transport sse`).
+- Connection refused → wrong host/port. Check `VEI_SSE_URL`, `VEI_HOST`, `VEI_PORT`.
+- ImportError on start → missing deps. Install with `pip install -e .[sse]`.
+- Need verbose logs → export `FASTMCP_LOG_LEVEL=DEBUG`.
+- Corporate proxies affecting localhost posts → set `NO_PROXY=127.0.0.1,localhost` and unset `HTTP(S)_PROXY`.
+- Mixed origins (localhost vs 127.0.0.1) → keep exactly the same host in both GET /sse and POST /messages.
+- If still stuck, use stdio transport for development: `vei-chat --transport stdio` or `vei-smoke --transport stdio`.
+
+### MCP library versions
+- Ensure a modern `mcp` is installed for both client and server code paths:
+  - `pip install -U "mcp>=1.13.0"`
+  - Verify with: `python -c "import mcp; print(getattr(mcp,'__version__','unknown'))"`
 
 ## Status
 Minimal runnable slice with deterministic Slack/Mail events and a simple virtual site. Extend scenarios under `vei/world/`.

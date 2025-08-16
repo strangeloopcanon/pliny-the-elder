@@ -1,18 +1,17 @@
-Test setup (SSE transport)
+Test setup (stdio-first)
 
-- Start the SSE server in a terminal:
+- No server to pre-start: stdio tests spawn `python -m vei.router` automatically.
+- Live LLM test requires an API key in environment or `.env` (OPENAI_API_KEY).
 
-```bash
-VEI_SEED=42042 python -m vei.router.sse
-```
-
-- Default SSE URL: `http://127.0.0.1:3001/sse`.
-  - Message POST endpoint (for non-SSE clients): `http://127.0.0.1:3001/messages/`.
-  - Override SSE URL with `VEI_SSE_URL` env for tests.
-
-- Run tests:
+Run tests:
 
 ```bash
 pytest -q
 ```
 
+Live LLM test (optional):
+
+```bash
+# Ensure .env contains OPENAI_API_KEY (and optional OPENAI_BASE_URL)
+pytest -q -k llm_stdio_smoke
+```
