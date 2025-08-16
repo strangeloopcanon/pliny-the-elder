@@ -23,6 +23,8 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from datetime import datetime
+import argparse
 
 
 def _load_env() -> None:
@@ -37,8 +39,29 @@ def _load_env() -> None:
 async def main() -> int:
     _load_env()
 
-    # Artifacts directory
-    art = Path(os.environ.get("VEI_ARTIFACTS_DIR", "_vei_out/llm_smoke")).resolve()
+    # CLI args (override env/defaults)
+    parser = argparse.ArgumentParser(description="Standalone LLM stdio smoke runner")
+    parser.add_argument("--model", default=os.environ.get("VEI_MODEL", "gpt-5"))
+    parser.add_argument(
+        "--prompt",
+        default=os.environ.get(
+            "LLM_SMOKE_PROMPT",
+            "You are a planner that MUST return a JSON object with keys 'tool' and 'args'. "
+            "Choose 'browser.read' with {} as args. Reply with JSON only.",
+        ),
+        help="System prompt sent to the LLM",
+    )
+    parser.add_argument(
+        "--artifacts-dir",
+        default=os.environ.get("VEI_ARTIFACTS_DIR", "_vei_out/llm_smoke"),
+        help="Base artifacts directory (a timestamped subdir is created)",
+    )
+    args_ns = parser.parse_args()
+
+    # Artifacts directory (timestamped to avoid overwrites)
+    base = Path(args_ns.artifacts_dir).resolve()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    art = base / f"run_{ts}"
     art.mkdir(parents=True, exist_ok=True)
     os.environ["VEI_ARTIFACTS_DIR"] = str(art)
 
@@ -72,11 +95,8 @@ async def main() -> int:
                 api_key=os.environ.get("OPENAI_API_KEY"),
                 base_url=os.environ.get("OPENAI_BASE_URL"),
             )
-            model = os.environ.get("VEI_MODEL", "gpt-5")
-            system = (
-                "You are a planner that MUST return a JSON object with keys 'tool' and 'args'. "
-                "Choose 'browser.read' with {} as args. Reply with JSON only."
-            )
+            model = str(args_ns.model)
+            system = str(args_ns.prompt)
             messages = [{"role": "system", "content": system}]
 
             chat = await client.chat.completions.create(model=model, messages=messages)
@@ -98,6 +118,7 @@ async def main() -> int:
                 assert content_list, "expected content from tool result"
 
     trace = art / "trace.jsonl"
+    print(f"Artifacts dir: {art}")
     print(f"Trace written to: {trace}")
     if trace.exists():
         try:
@@ -116,4 +137,3 @@ async def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(asyncio.run(main()))
-

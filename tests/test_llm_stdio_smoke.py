@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+from datetime import datetime
 
 import pytest
 
@@ -29,7 +30,10 @@ async def test_llm_stdio_smoke(tmp_path: Path) -> None:
     # otherwise default to the test's tmp_path.
     preset_art = os.environ.get("VEI_ARTIFACTS_DIR")
     if preset_art:
-        art = Path(preset_art)
+        base = Path(preset_art)
+        # Append timestamped subdir to avoid overwrites when a fixed path is used
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        art = base / f"run_{ts}"
     else:
         art = tmp_path / "artifacts"
         os.environ["VEI_ARTIFACTS_DIR"] = str(art)
@@ -95,7 +99,8 @@ async def test_llm_stdio_smoke(tmp_path: Path) -> None:
     try:
         stash_dir = repo_root / ".artifacts"
         stash_dir.mkdir(parents=True, exist_ok=True)
-        stash_path = stash_dir / "llm_stdio_smoke_trace.jsonl"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stash_path = stash_dir / f"llm_stdio_smoke_trace.{ts}.jsonl"
         shutil.copyfile(trace, stash_path)
         # Print last few lines to stdout for quick inspection in CI/local runs
         try:
