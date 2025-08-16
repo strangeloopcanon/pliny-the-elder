@@ -39,8 +39,8 @@ async def run_episode(
     task: str | None = None,
 ) -> list[dict]:
     async with sse_client(sse_url) as (read, write):
-        session = ClientSession(read, write)
-        await session.initialize()
+        async with ClientSession(read, write) as session:
+            await session.initialize()
 
         # Allow routing via OpenAI-compatible gateway
         client = AsyncOpenAI(
@@ -104,7 +104,8 @@ def _ensure_sse_available(sse_url: str, autostart: bool) -> None:
     env = os.environ.copy()
     env.setdefault("VEI_HOST", host)
     env.setdefault("VEI_PORT", str(port))
-    subprocess.Popen(["python", "-m", "vei.router.sse"], env=env)
+    import sys as _sys
+    subprocess.Popen([_sys.executable or "python3", "-m", "vei.router.sse"], env=env)
     for _ in range(20):
         if _port_open(host, port):
             break

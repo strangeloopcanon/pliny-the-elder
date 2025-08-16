@@ -13,7 +13,7 @@ authors = [
   { name = "VEI", email = "noreply@example.com" }
 ]
 dependencies = [
-  "mcp>=1.2.0",
+  "mcp>=1.13.0",
   "pydantic>=2.7.0",
   "typer>=0.12.3",
   "rich>=13.7.0",
@@ -23,9 +23,13 @@ dependencies = [
 browser = [
   "playwright>=1.45.0"
 ]
+sse = [
+  "uvicorn>=0.30.0"
+]
 llm = [
   "openai>=1.55.0",
   "python-dotenv>=1.0.0",
+  "openai-agents>=0.2.0",
 ]
 rl = [
   "gymnasium>=0.29.0"

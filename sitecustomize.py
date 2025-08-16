@@ -18,7 +18,16 @@ def _maybe_start_sse_server() -> None:
     try:
         from vei.router.core import Router
         from vei.router.server_fastmcp import create_mcp_server
-    except Exception:
+        from vei.config import Config
+    except Exception as e:
+        # Import-time failure; nothing we can do. Optionally log for debugging.
+        _log_path = os.environ.get("VEI_SSE_LOG_FILE", os.path.join(os.getcwd(), "_vei_out", "sse_autostart.log"))
+        try:
+            os.makedirs(os.path.dirname(_log_path), exist_ok=True)
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(f"[import-error] {e}\n")
+        except Exception:
+            ...
         return
 
     host = os.environ.get("VEI_HOST", "127.0.0.1")
@@ -42,17 +51,22 @@ def _maybe_start_sse_server() -> None:
         return
 
     def _run() -> None:
-        # Seed/artifacts dir are read here; TraceLogger picks up artifacts dir updates later if needed
-        seed = int(os.environ.get("VEI_SEED", "42042"))
-        art = os.environ.get("VEI_ARTIFACTS_DIR")
-        router = Router(seed=seed, artifacts_dir=art)
-        srv = create_mcp_server(router)
+        # Read full configuration (host/port/seed/artifacts/scenario) from env
+        cfg = Config.from_env()
+        router = Router(seed=cfg.seed, artifacts_dir=cfg.artifacts_dir, scenario=cfg.scenario)
+        srv = create_mcp_server(router, host=cfg.host, port=cfg.port)
         # Run SSE server; defaults expose /sse and /messages/
         try:
             srv.run("sse")
-        except Exception:
-            # Do not crash the main process if server fails to start
-            pass
+        except Exception as e:
+            # Do not crash the main process if server fails to start, but log why
+            _log_path = os.environ.get("VEI_SSE_LOG_FILE", os.path.join(os.getcwd(), "_vei_out", "sse_autostart.log"))
+            try:
+                os.makedirs(os.path.dirname(_log_path), exist_ok=True)
+                with open(_log_path, "a", encoding="utf-8") as _f:
+                    _f.write(f"[run-error] {type(e).__name__}: {e}\n")
+            except Exception:
+                ...
 
     t = threading.Thread(target=_run, name="vei-sse", daemon=True)
     t.start()
@@ -61,4 +75,3 @@ def _maybe_start_sse_server() -> None:
 
 
 _maybe_start_sse_server()
-
