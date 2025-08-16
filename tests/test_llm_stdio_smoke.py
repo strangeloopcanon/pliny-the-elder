@@ -4,11 +4,12 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import shutil
 
 import pytest
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio("asyncio")
 @pytest.mark.timeout(120)
 @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY in environment/.env")
 async def test_llm_stdio_smoke(tmp_path: Path) -> None:
@@ -23,9 +24,15 @@ async def test_llm_stdio_smoke(tmp_path: Path) -> None:
     except Exception:
         ...
 
-    # Prepare artifacts dir for the server trace
-    art = tmp_path / "artifacts"
-    os.environ["VEI_ARTIFACTS_DIR"] = str(art)
+    # Prepare artifacts dir for the server trace.
+    # Honor pre-set VEI_ARTIFACTS_DIR (so logs can persist outside pytest tmp),
+    # otherwise default to the test's tmp_path.
+    preset_art = os.environ.get("VEI_ARTIFACTS_DIR")
+    if preset_art:
+        art = Path(preset_art)
+    else:
+        art = tmp_path / "artifacts"
+        os.environ["VEI_ARTIFACTS_DIR"] = str(art)
 
     # Spawn stdio MCP server (vei.router)
     from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -83,3 +90,25 @@ async def test_llm_stdio_smoke(tmp_path: Path) -> None:
     trace = Path(art) / "trace.jsonl"
     assert trace.exists(), "trace.jsonl should be written by the server"
 
+    # Persist a copy under repo-local .artifacts and echo a brief tail to console
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        stash_dir = repo_root / ".artifacts"
+        stash_dir.mkdir(parents=True, exist_ok=True)
+        stash_path = stash_dir / "llm_stdio_smoke_trace.jsonl"
+        shutil.copyfile(trace, stash_path)
+        # Print last few lines to stdout for quick inspection in CI/local runs
+        try:
+            tail_n = 20
+            with trace.open("r", encoding="utf-8") as f:
+                lines = f.readlines()
+            print(f"[LLM smoke] trace path: {trace}")
+            print(f"[LLM smoke] copied to: {stash_path}")
+            print("[LLM smoke] last lines:")
+            for line in lines[-tail_n:]:
+                print(line.rstrip())
+        except Exception:
+            ...
+    except Exception:
+        # Non-fatal: logging persistence is best-effort
+        ...

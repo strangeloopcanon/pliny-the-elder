@@ -34,8 +34,9 @@ def _port_open(host: str, port: int) -> bool:
 async def _run_stdio(seed: int = 42042) -> list[dict[str, Any]]:
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client
+    import sys as _sys
 
-    params = StdioServerParameters(command="python3", args=["-m", "vei.router"], env={"VEI_SEED": str(seed)})
+    params = StdioServerParameters(command=_sys.executable or "python3", args=["-m", "vei.router"], env={"VEI_SEED": str(seed)})
     out: list[dict[str, Any]] = []
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as s:

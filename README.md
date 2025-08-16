@@ -95,6 +95,17 @@ vei-demo --mode llm --transport stdio --model gpt-5 --artifacts-dir ./_vei_out/d
 
  
 
+### Testing
+Prefer invoking pytest via the active interpreter to avoid host shims:
+```bash
+python -m pytest -q
+```
+Live LLM test (requires `.env` with `OPENAI_API_KEY`; tests auto-load `.env`):
+```bash
+python -m pytest -q -k llm_stdio_smoke
+```
+Artifacts: the LLM test writes a `trace.jsonl` to `VEI_ARTIFACTS_DIR` if set, or to a temp directory otherwise. A copy is saved under `.artifacts/llm_stdio_smoke_trace.jsonl`, and the last lines are echoed to the console for quick inspection.
+
 ### Start the MCP server (manual, optional)
 ```bash
 VEI_SEED=42042 python -m vei.router.sse
