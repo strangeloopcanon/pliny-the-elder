@@ -148,128 +148,129 @@ def run(
                         raise
                     if verbose:
                         typer.echo("MCP session initialized.")
-                # Resolve base URL with an explicit override; allow "default" to force the SDK default
-                effective_base_url: str | None
-                if openai_base_url is not None and openai_base_url.strip().lower() == "default":
-                    effective_base_url = None
-                elif openai_base_url:
-                    effective_base_url = openai_base_url
-                else:
-                    effective_base_url = os.environ.get("OPENAI_BASE_URL")
-                client = AsyncOpenAI(
-                    base_url=effective_base_url,
-                    api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
-                )
-                if verbose:
-                    typer.echo(f"LLM base_url={'default' if not effective_base_url else effective_base_url}")
-                messages: list[dict] = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a planner that MUST return a non-empty JSON object with keys \"tool\" (string) and \"args\" (object). "
-                            "If uncertain, return {\"tool\":\"vei.observe\",\"args\":{}}. Reply with JSON only."
-                        ),
-                    }
-                ]
-                if task:
-                    messages.append({"role": "user", "content": f"Task: {task}"})
-                # Simple 1-tool-per-step loop
-                for i in range(max_steps):
-                    obs = await _call(s, "vei.observe", {})
-                    transcript.append({"observation": obs})
-                    _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
-                    _print_observation(verbose, obs)
-                    _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
-                    pend = obs.get("pending_events", {})
-                    # Only early-stop after at least one step to allow the model to act
-                    if i > 0 and pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
-                        break
-                    menu = obs.get("action_menu", [])
-                    menu_text = "\n".join(
-                        f"- {m.get('tool')} {json.dumps(m.get('args', m.get('args_schema', {})))}" for m in menu
-                    )
-                    user = (
-                        f"Time: {obs.get('time_ms')}\nFocus: {obs.get('focus')}\nSummary: {obs.get('summary')}\n"
-                        f"Pending: {json.dumps(obs.get('pending_events'))}\nAction menu (choose ONE):\n{menu_text}\n"
-                        "Reply strictly as JSON {\"tool\": str, \"args\": object}."
-                    )
-                    messages.append({"role": "user", "content": user})
-                    # Responses API with reasoning for gpt-5; hard timeout wrapper
-                    prompt = (
-                        "\n".join(f"[{m['role']}] {m['content']}" for m in messages)
-                        + "\nReply strictly as JSON {\"tool\": str, \"args\": object}."
-                    )
-                    try:
-                        if verbose:
-                            typer.echo("LLM: requesting plan via Responses API…")
-                        resp = await asyncio.wait_for(
-                            client.responses.create(
-                                model=model,
-                                input=prompt,
-                                # temperature is not supported by gpt-5 responses
-                                max_output_tokens=256,
-                                reasoning={"effort": "high"},
-                            ),
-                            timeout=timeout_s,
-                        )
-                        raw = getattr(resp, "output_text", None)
-                        if not raw:
-                            out = getattr(resp, "output", None)
-                            if out and isinstance(out, list):
-                                try:
-                                    raw = out[0].content[0].text
-                                except Exception:
-                                    raw = "{}"
-                            else:
-                                raw = "{}"
-                        if verbose:
-                            typer.echo(f"LLM: received plan text (len={len(raw or '')})")
-                    except asyncio.TimeoutError:
-                        if verbose:
-                            typer.echo("LLM: timeout waiting for Responses API")
-                        transcript.append({"error": {"step": i, "message": "llm_timeout"}})
-                        _append_transcript_line(
-                            {"error": {"step": i, "message": "llm_timeout"}}, os.environ.get("VEI_ARTIFACTS_DIR")
-                        )
-                        break
-                    except Exception as e:
-                        if verbose:
-                            typer.echo(f"LLM: error {e}")
-                        transcript.append({"error": {"step": i, "message": str(e)}})
-                        _append_transcript_line(
-                            {"error": {"step": i, "message": str(e)}}, os.environ.get("VEI_ARTIFACTS_DIR")
-                        )
-                        break
-                    plan = extract_plan(raw, default_tool="vei.observe")
-                    # Enforce non-empty JSON plan shape; default and log when empty/invalid
-                    if not isinstance(plan, dict) or not plan.get("tool"):
-                        plan = {"tool": "vei.observe", "args": {}}
-                    tool = str(plan.get("tool"))
-                    args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
-                    try:
-                        result = await _call(s, tool, args)
-                    except Exception as e:
-                        result = {"error": str(e)}
-                    transcript.append({"action": {"tool": tool, "args": args, "result": result}})
-                    _append_transcript_line(
-                        {"action": {"tool": tool, "args": args, "result": result}}, os.environ.get("VEI_ARTIFACTS_DIR")
-                    )
-                    _print_action(verbose, tool, args, result)
 
-                    # Auto-drain pending events after key actions to ensure bounded runs
-                    if tool in {"mail.compose", "slack.send_message"}:
+                    # Resolve base URL with an explicit override; allow "default" to force the SDK default
+                    effective_base_url: str | None
+                    if openai_base_url is not None and openai_base_url.strip().lower() == "default":
+                        effective_base_url = None
+                    elif openai_base_url:
+                        effective_base_url = openai_base_url
+                    else:
+                        effective_base_url = os.environ.get("OPENAI_BASE_URL")
+                    client = AsyncOpenAI(
+                        base_url=effective_base_url,
+                        api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
+                    )
+                    if verbose:
+                        typer.echo(f"LLM base_url={'default' if not effective_base_url else effective_base_url}")
+                    messages: list[dict] = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a planner that MUST return a non-empty JSON object with keys \"tool\" (string) and \"args\" (object). "
+                                "If uncertain, return {\"tool\":\"vei.observe\",\"args\":{}}. Reply with JSON only."
+                            ),
+                        }
+                    ]
+                    if task:
+                        messages.append({"role": "user", "content": f"Task: {task}"})
+                    # Simple 1-tool-per-step loop
+                    for i in range(max_steps):
+                        obs = await _call(s, "vei.observe", {})
+                        transcript.append({"observation": obs})
+                        _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                        _print_observation(verbose, obs)
+                        _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                        pend = obs.get("pending_events", {})
+                        # Only early-stop after at least one step to allow the model to act
+                        if i > 0 and pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
+                            break
+                        menu = obs.get("action_menu", [])
+                        menu_text = "\n".join(
+                            f"- {m.get('tool')} {json.dumps(m.get('args', m.get('args_schema', {})))}" for m in menu
+                        )
+                        user = (
+                            f"Time: {obs.get('time_ms')}\nFocus: {obs.get('focus')}\nSummary: {obs.get('summary')}\n"
+                            f"Pending: {json.dumps(obs.get('pending_events'))}\nAction menu (choose ONE):\n{menu_text}\n"
+                            "Reply strictly as JSON {\"tool\": str, \"args\": object}."
+                        )
+                        messages.append({"role": "user", "content": user})
+                        # Responses API with reasoning for gpt-5; hard timeout wrapper
+                        prompt = (
+                            "\n".join(f"[{m['role']}] {m['content']}" for m in messages)
+                            + "\nReply strictly as JSON {\"tool\": str, \"args\": object}."
+                        )
                         try:
-                            await _call(s, "vei.tick", {"dt_ms": 20000})
-                            obs2 = await _call(s, "vei.observe", {})
-                            transcript.append({"observation": obs2})
-                            _append_transcript_line({"observation": obs2}, os.environ.get("VEI_ARTIFACTS_DIR"))
-                            _print_observation(verbose, obs2)
-                            p2 = obs2.get("pending_events", {})
-                            if p2.get("mail", 0) == 0 and p2.get("slack", 0) == 0:
-                                break
-                        except Exception:
-                            ...
-            return transcript
+                            if verbose:
+                                typer.echo("LLM: requesting plan via Responses API…")
+                            resp = await asyncio.wait_for(
+                                client.responses.create(
+                                    model=model,
+                                    input=prompt,
+                                    # temperature is not supported by gpt-5 responses
+                                    max_output_tokens=256,
+                                    reasoning={"effort": "high"},
+                                ),
+                                timeout=timeout_s,
+                            )
+                            raw = getattr(resp, "output_text", None)
+                            if not raw:
+                                out = getattr(resp, "output", None)
+                                if out and isinstance(out, list):
+                                    try:
+                                        raw = out[0].content[0].text
+                                    except Exception:
+                                        raw = "{}"
+                                else:
+                                    raw = "{}"
+                            if verbose:
+                                typer.echo(f"LLM: received plan text (len={len(raw or '')})")
+                        except asyncio.TimeoutError:
+                            if verbose:
+                                typer.echo("LLM: timeout waiting for Responses API")
+                            transcript.append({"error": {"step": i, "message": "llm_timeout"}})
+                            _append_transcript_line(
+                                {"error": {"step": i, "message": "llm_timeout"}}, os.environ.get("VEI_ARTIFACTS_DIR")
+                            )
+                            break
+                        except Exception as e:
+                            if verbose:
+                                typer.echo(f"LLM: error {e}")
+                            transcript.append({"error": {"step": i, "message": str(e)}})
+                            _append_transcript_line(
+                                {"error": {"step": i, "message": str(e)}}, os.environ.get("VEI_ARTIFACTS_DIR")
+                            )
+                            break
+                        plan = extract_plan(raw, default_tool="vei.observe")
+                        # Enforce non-empty JSON plan shape; default and log when empty/invalid
+                        if not isinstance(plan, dict) or not plan.get("tool"):
+                            plan = {"tool": "vei.observe", "args": {}}
+                        tool = str(plan.get("tool"))
+                        args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
+                        try:
+                            result = await _call(s, tool, args)
+                        except Exception as e:
+                            result = {"error": str(e)}
+                        transcript.append({"action": {"tool": tool, "args": args, "result": result}})
+                        _append_transcript_line(
+                            {"action": {"tool": tool, "args": args, "result": result}}, os.environ.get("VEI_ARTIFACTS_DIR")
+                        )
+                        _print_action(verbose, tool, args, result)
+
+                        # Auto-drain pending events after key actions to ensure bounded runs
+                        if tool in {"mail.compose", "slack.send_message"}:
+                            try:
+                                await _call(s, "vei.tick", {"dt_ms": 20000})
+                                obs2 = await _call(s, "vei.observe", {})
+                                transcript.append({"observation": obs2})
+                                _append_transcript_line({"observation": obs2}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                                _print_observation(verbose, obs2)
+                                p2 = obs2.get("pending_events", {})
+                                if p2.get("mail", 0) == 0 and p2.get("slack", 0) == 0:
+                                    break
+                            except Exception:
+                                ...
+                    return transcript
 
         try:
             out = asyncio.run(_llm())
@@ -310,50 +311,50 @@ def run(
                             raise
                         if verbose:
                             typer.echo("MCP session initialized.")
-                    obs = await _call(s, "vei.observe", {})
-                    transcript.append({"observation": obs})
-                    _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
-                    res = await _call(s, "browser.read", {})
-                    transcript.append({"action": {"tool": "browser.read", "args": {}, "result": res}})
-                    _append_transcript_line(
-                        {"action": {"tool": "browser.read", "args": {}, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR")
-                    )
-                    res = await _call(
-                        s,
-                        "slack.send_message",
-                        {"channel": "#procurement", "text": "Summary: budget $3200, citations included."},
-                    )
-                    transcript.append(
-                        {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}}
-                    )
-                    _append_transcript_line(
-                        {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}},
-                        os.environ.get("VEI_ARTIFACTS_DIR"),
-                    )
-                    res = await _call(
-                        s,
-                        "mail.compose",
-                        {
-                            "to": "sales@macrocompute.example",
-                            "subj": "Quote request",
-                            "body_text": "Please send latest price and ETA.",
-                        },
-                    )
-                    transcript.append(
-                        {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}}
-                    )
-                    _append_transcript_line(
-                        {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}},
-                        os.environ.get("VEI_ARTIFACTS_DIR"),
-                    )
-                    for _ in range(24):
-                        obs = await _call(s, "vei.observe", {"focus": "mail"})
+                        obs = await _call(s, "vei.observe", {})
                         transcript.append({"observation": obs})
                         _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
-                        pend = obs.get("pending_events", {})
-                        if pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
-                            break
-                return transcript
+                        res = await _call(s, "browser.read", {})
+                        transcript.append({"action": {"tool": "browser.read", "args": {}, "result": res}})
+                        _append_transcript_line(
+                            {"action": {"tool": "browser.read", "args": {}, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR")
+                        )
+                        res = await _call(
+                            s,
+                            "slack.send_message",
+                            {"channel": "#procurement", "text": "Summary: budget $3200, citations included."},
+                        )
+                        transcript.append(
+                            {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}}
+                        )
+                        _append_transcript_line(
+                            {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}},
+                            os.environ.get("VEI_ARTIFACTS_DIR"),
+                        )
+                        res = await _call(
+                            s,
+                            "mail.compose",
+                            {
+                                "to": "sales@macrocompute.example",
+                                "subj": "Quote request",
+                                "body_text": "Please send latest price and ETA.",
+                            },
+                        )
+                        transcript.append(
+                            {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}}
+                        )
+                        _append_transcript_line(
+                            {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}},
+                            os.environ.get("VEI_ARTIFACTS_DIR"),
+                        )
+                        for _ in range(24):
+                            obs = await _call(s, "vei.observe", {"focus": "mail"})
+                            transcript.append({"observation": obs})
+                            _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                            pend = obs.get("pending_events", {})
+                            if pend.get("mail", 0) == 0 and pend.get("slack", 0) == 0:
+                                break
+                        return transcript
 
             out = asyncio.run(_scripted())
             # Also print scripted progress if requested
