@@ -106,6 +106,10 @@ python -m pytest -q -k llm_stdio_smoke
 ```
 Artifacts: the LLM test writes a `trace.jsonl` to `VEI_ARTIFACTS_DIR` if set, or to a temp directory otherwise. A copy is saved under `.artifacts/llm_stdio_smoke_trace.jsonl`, and the last lines are echoed to the console for quick inspection.
 
+Notes:
+- The LLM test is included in the full suite and runs automatically when `OPENAI_API_KEY` is available (`python -m pytest -q`).
+- Customize the LLM test via env vars: set `VEI_MODEL` (e.g., `gpt-5`) and `LLM_SMOKE_PROMPT` to override the system prompt.
+
 ### Start the MCP server (manual, optional)
 ```bash
 VEI_SEED=42042 python -m vei.router.sse
