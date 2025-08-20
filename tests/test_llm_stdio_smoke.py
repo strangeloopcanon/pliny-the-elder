@@ -34,6 +34,8 @@ async def test_llm_stdio_smoke(tmp_path: Path) -> None:
         # Append timestamped subdir to avoid overwrites when a fixed path is used
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         art = base / f"run_{ts}"
+        # Ensure server writes to the subdir as well
+        os.environ["VEI_ARTIFACTS_DIR"] = str(art)
     else:
         art = tmp_path / "artifacts"
         os.environ["VEI_ARTIFACTS_DIR"] = str(art)
@@ -61,19 +63,33 @@ async def test_llm_stdio_smoke(tmp_path: Path) -> None:
 
             # Construct a deterministic LLM prompt to select a simple tool
             client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_BASE_URL"))
-            model = os.environ.get("VEI_MODEL", "gpt-5")
-            system = (
+            # Hard-pin smoke test to gpt-5-mini by default for speed/predictability.
+            # Respect VEI_MODEL if explicitly set.
+            model = os.environ.get("VEI_MODEL", "gpt-5-mini")
+            system = os.environ.get(
+                "LLM_SMOKE_PROMPT",
                 "You are a planner that MUST return a JSON object with keys 'tool' and 'args'. "
-                "Choose 'browser.read' with {} as args. Reply with JSON only."
+                "Choose 'browser.read' with {} as args. Reply with JSON only.",
             )
-            messages = [{"role": "system", "content": system}]
+            # Responses API for gpt-5 family (no temperature). Enforce JSON output.
 
             # One observation to seed context
             obs = await session.call_tool("vei.observe", {})
             assert obs is not None
 
-            chat = await client.chat.completions.create(model=model, messages=messages)
-            content = chat.choices[0].message.content or "{}"
+            resp = await client.responses.create(model=model, input=system + "\nReturn a JSON object only.")
+            content = getattr(resp, "output_text", None)
+            if not content:
+                try:
+                    out = getattr(resp, "output", [])
+                    if out and hasattr(out[0], "content"):
+                        cnt = out[0].content
+                        if cnt and hasattr(cnt[0], "text"):
+                            content = cnt[0].text
+                except Exception:
+                    content = None
+            if not content:
+                content = "{}"
             try:
                 plan = json.loads(content)
             except Exception:
