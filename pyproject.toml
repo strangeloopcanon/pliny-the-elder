@@ -39,11 +39,14 @@ rl = [
 vei-run = "vei.cli.vei_run:app"
 vei-build-scenario = "vei.cli.vei_build_scenario:app"
 vei-score = "vei.cli.vei_score:app"
+vei-score-erp = "vei.cli.vei_score_erp:app"
+vei-score-crm = "vei.cli.vei_score_crm:app"
 vei-llm-test = "vei.cli.vei_llm_test:app"
 vei-smoke = "vei.cli.vei_smoke:app"
 vei-chat = "vei.cli.vei_chat:app"
 vei-scenarios = "vei.cli.vei_scenarios:app"
 vei-demo = "vei.cli.vei_demo:app"
+vei-serve = "vei.cli.vei_serve:app"
 
 [tool.setuptools.packages.find]
 where = ["."]

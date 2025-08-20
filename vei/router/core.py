@@ -486,6 +486,18 @@ class Router:
         self.slack = SlackSim(self.bus, self.scenario)
         self.mail = MailSim(self.bus, self.scenario)
         self.browser = BrowserVirtual(self.bus, self.scenario)
+        # Optional ERP twin
+        try:
+            from .erp import ErpSim  # local import to avoid import-time failures
+            self.erp = ErpSim(self.bus, self.scenario)
+        except Exception:
+            self.erp = None  # type: ignore[attr-defined]
+        # Optional CRM twin
+        try:
+            from .crm import CrmSim
+            self.crm = CrmSim(self.bus, self.scenario)
+        except Exception:
+            self.crm = None  # type: ignore[attr-defined]
 
     def call_and_step(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool call, deliver any due event, advance time, and persist trace.
@@ -544,6 +556,62 @@ class Router:
         if tool == "browser.back":
             return self.browser.back()
 
+        # ERP tools
+        if tool.startswith("erp."):
+            if not getattr(self, "erp", None):
+                raise MCPError("unsupported_tool", "ERP twin not available")
+            erp = getattr(self, "erp")
+            if tool == "erp.create_po":
+                return erp.create_po(**args)
+            if tool == "erp.get_po":
+                return erp.get_po(**args)
+            if tool == "erp.list_pos":
+                return erp.list_pos()
+            if tool == "erp.receive_goods":
+                return erp.receive_goods(**args)
+            if tool == "erp.submit_invoice":
+                return erp.submit_invoice(**args)
+            if tool == "erp.get_invoice":
+                return erp.get_invoice(**args)
+            if tool == "erp.list_invoices":
+                return erp.list_invoices()
+            if tool == "erp.match_three_way":
+                return erp.match_three_way(**args)
+            if tool == "erp.post_payment":
+                return erp.post_payment(**args)
+            raise MCPError("unknown_tool", f"No such tool: {tool}")
+
+        # CRM tools
+        if tool.startswith("crm."):
+            if not getattr(self, "crm", None):
+                raise MCPError("unsupported_tool", "CRM twin not available")
+            crm = getattr(self, "crm")
+            if tool == "crm.create_contact":
+                return crm.create_contact(**args)
+            if tool == "crm.get_contact":
+                return crm.get_contact(**args)
+            if tool == "crm.list_contacts":
+                return crm.list_contacts()
+            if tool == "crm.create_company":
+                return crm.create_company(**args)
+            if tool == "crm.get_company":
+                return crm.get_company(**args)
+            if tool == "crm.list_companies":
+                return crm.list_companies()
+            if tool == "crm.associate_contact_company":
+                return crm.associate_contact_company(**args)
+            if tool == "crm.create_deal":
+                return crm.create_deal(**args)
+            if tool == "crm.get_deal":
+                return crm.get_deal(**args)
+            if tool == "crm.list_deals":
+                return crm.list_deals()
+            if tool == "crm.update_deal_stage":
+                return crm.update_deal_stage(**args)
+            if tool == "crm.log_activity":
+                return crm.log_activity(**args)
+            raise MCPError("unknown_tool", f"No such tool: {tool}")
+
         raise MCPError("unknown_tool", f"No such tool: {tool}")
 
     def snapshot_observation(self, focus_hint: Optional[str] = None) -> Observation:
@@ -573,6 +641,10 @@ class Router:
             focus = "slack"
         elif tool.startswith("mail."):
             focus = "mail"
+        elif tool.startswith("erp."):
+            focus = "erp"
+        elif tool.startswith("crm."):
+            focus = "crm"
         elif tool.startswith("browser."):
             focus = "browser"
         return self.snapshot_observation(focus)
@@ -589,6 +661,10 @@ class Router:
             focus = "slack"
         elif tool.startswith("mail."):
             focus = "mail"
+        elif tool.startswith("erp."):
+            focus = "erp"
+        elif tool.startswith("crm."):
+            focus = "crm"
         obs = self.snapshot_observation(focus)
         return {"result": result, "observation": obs.model_dump()}
 
@@ -673,6 +749,15 @@ class Router:
             if lst:
                 return f"Mail: {lst[0]['subj']} from {lst[0]['from']}"
             return "Mail: INBOX empty"
+        if focus == "erp":
+            # Surface a short state summary for agents
+            pos = len(getattr(self, "erp").pos) if getattr(self, "erp", None) else 0
+            invs = len(getattr(self, "erp").invoices) if getattr(self, "erp", None) else 0
+            return f"ERP: {pos} POs, {invs} invoices"
+        if focus == "crm":
+            cs = len(getattr(self, "crm").contacts) if getattr(self, "crm", None) else 0
+            ds = len(getattr(self, "crm").deals) if getattr(self, "crm", None) else 0
+            return f"CRM: {cs} contacts, {ds} deals"
         return ""
 
     def _action_menu(self, focus: str) -> List[Dict[str, Any]]:
@@ -693,5 +778,21 @@ class Router:
         if focus == "mail":
             return [
                 {"tool": "mail.compose", "args_schema": {"to": "str", "subj": "str", "body_text": "str"}},
+            ]
+        if focus == "erp" and getattr(self, "erp", None):
+            return [
+                {"tool": "erp.create_po", "args_schema": {"vendor": "str", "currency": "str", "lines": "[{item_id,desc,qty,unit_price}]"}},
+                {"tool": "erp.list_pos", "args_schema": {}},
+                {"tool": "erp.submit_invoice", "args_schema": {"vendor": "str", "po_id": "str", "lines": "[{item_id,qty,unit_price}]"}},
+                {"tool": "erp.match_three_way", "args_schema": {"po_id": "str", "invoice_id": "str", "receipt_id": "str?"}},
+            ]
+        if focus == "crm" and getattr(self, "crm", None):
+            return [
+                {"tool": "crm.create_contact", "args_schema": {"email": "str", "first_name": "str?", "last_name": "str?", "do_not_contact": "bool?"}},
+                {"tool": "crm.create_company", "args_schema": {"name": "str", "domain": "str?"}},
+                {"tool": "crm.associate_contact_company", "args_schema": {"contact_id": "str", "company_id": "str"}},
+                {"tool": "crm.create_deal", "args_schema": {"name": "str", "amount": "number", "stage": "str?", "contact_id": "str?", "company_id": "str?"}},
+                {"tool": "crm.update_deal_stage", "args_schema": {"id": "str", "stage": "str"}},
+                {"tool": "crm.log_activity", "args_schema": {"kind": "str", "contact_id": "str?", "deal_id": "str?", "note": "str?"}},
             ]
         return []

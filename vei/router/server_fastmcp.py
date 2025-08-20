@@ -7,6 +7,7 @@ from mcp.server.fastmcp import server as fserver
 from pydantic import BaseModel, Field
 
 from .core import Router, MCPError
+from .alias_packs import ERP_ALIAS_PACKS, CRM_ALIAS_PACKS
 
 
 class SlackOpenArgs(BaseModel):
@@ -218,6 +219,119 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
     def browser_back() -> dict[str, Any]:
         return R().call_and_step("browser.back", {})
 
+    # --- ERP twin tools ---
+    @srv.tool(name="erp.create_po", description="Create a purchase order (PO)")
+    def erp_create_po(vendor: str, currency: str, lines: list[dict[str, Any]]) -> dict[str, Any]:
+        try:
+            return R().call_and_step("erp.create_po", {"vendor": vendor, "currency": currency, "lines": lines})
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    @srv.tool(name="erp.get_po", description="Get a PO by id")
+    def erp_get_po(id: str) -> dict[str, Any]:
+        return R().call_and_step("erp.get_po", {"id": id})
+
+    @srv.tool(name="erp.list_pos", description="List all POs")
+    def erp_list_pos() -> list[dict[str, Any]]:
+        return R().call_and_step("erp.list_pos", {})  # type: ignore[return-value]
+
+    @srv.tool(name="erp.receive_goods", description="Receive goods against a PO")
+    def erp_receive_goods(po_id: str, lines: list[dict[str, Any]]) -> dict[str, Any]:
+        return R().call_and_step("erp.receive_goods", {"po_id": po_id, "lines": lines})
+
+    @srv.tool(name="erp.submit_invoice", description="Submit an invoice for a PO")
+    def erp_submit_invoice(vendor: str, po_id: str, lines: list[dict[str, Any]]) -> dict[str, Any]:
+        return R().call_and_step("erp.submit_invoice", {"vendor": vendor, "po_id": po_id, "lines": lines})
+
+    @srv.tool(name="erp.get_invoice", description="Get invoice by id")
+    def erp_get_invoice(id: str) -> dict[str, Any]:
+        return R().call_and_step("erp.get_invoice", {"id": id})
+
+    @srv.tool(name="erp.list_invoices", description="List invoices")
+    def erp_list_invoices() -> list[dict[str, Any]]:
+        return R().call_and_step("erp.list_invoices", {})  # type: ignore[return-value]
+
+    @srv.tool(name="erp.match_three_way", description="Three-way match PO vs receipt vs invoice")
+    def erp_match_three_way(po_id: str, invoice_id: str, receipt_id: str | None = None) -> dict[str, Any]:
+        return R().call_and_step("erp.match_three_way", {"po_id": po_id, "invoice_id": invoice_id, "receipt_id": receipt_id})
+
+    @srv.tool(name="erp.post_payment", description="Post a payment against an invoice")
+    def erp_post_payment(invoice_id: str, amount: float) -> dict[str, Any]:
+        return R().call_and_step("erp.post_payment", {"invoice_id": invoice_id, "amount": amount})
+
+    # --- CRM twin tools ---
+    @srv.tool(name="crm.create_contact", description="Create a CRM contact")
+    def crm_create_contact(email: str, first_name: str | None = None, last_name: str | None = None, do_not_contact: bool = False) -> dict[str, Any]:
+        return R().call_and_step("crm.create_contact", {"email": email, "first_name": first_name, "last_name": last_name, "do_not_contact": do_not_contact})
+
+    @srv.tool(name="crm.get_contact", description="Get contact by id")
+    def crm_get_contact(id: str) -> dict[str, Any]:
+        return R().call_and_step("crm.get_contact", {"id": id})
+
+    @srv.tool(name="crm.list_contacts", description="List contacts")
+    def crm_list_contacts() -> list[dict[str, Any]]:
+        return R().call_and_step("crm.list_contacts", {})  # type: ignore[return-value]
+
+    @srv.tool(name="crm.create_company", description="Create a company")
+    def crm_create_company(name: str, domain: str | None = None) -> dict[str, Any]:
+        return R().call_and_step("crm.create_company", {"name": name, "domain": domain})
+
+    @srv.tool(name="crm.get_company", description="Get company by id")
+    def crm_get_company(id: str) -> dict[str, Any]:
+        return R().call_and_step("crm.get_company", {"id": id})
+
+    @srv.tool(name="crm.list_companies", description="List companies")
+    def crm_list_companies() -> list[dict[str, Any]]:
+        return R().call_and_step("crm.list_companies", {})  # type: ignore[return-value]
+
+    @srv.tool(name="crm.associate_contact_company", description="Associate contact and company")
+    def crm_associate_contact_company(contact_id: str, company_id: str) -> dict[str, Any]:
+        return R().call_and_step("crm.associate_contact_company", {"contact_id": contact_id, "company_id": company_id})
+
+    @srv.tool(name="crm.create_deal", description="Create a deal")
+    def crm_create_deal(name: str, amount: float, stage: str = "New", contact_id: str | None = None, company_id: str | None = None) -> dict[str, Any]:
+        return R().call_and_step("crm.create_deal", {"name": name, "amount": amount, "stage": stage, "contact_id": contact_id, "company_id": company_id})
+
+    @srv.tool(name="crm.get_deal", description="Get deal by id")
+    def crm_get_deal(id: str) -> dict[str, Any]:
+        return R().call_and_step("crm.get_deal", {"id": id})
+
+    @srv.tool(name="crm.list_deals", description="List deals")
+    def crm_list_deals() -> list[dict[str, Any]]:
+        return R().call_and_step("crm.list_deals", {})  # type: ignore[return-value]
+
+    @srv.tool(name="crm.update_deal_stage", description="Update deal stage")
+    def crm_update_deal_stage(id: str, stage: str) -> dict[str, Any]:
+        return R().call_and_step("crm.update_deal_stage", {"id": id, "stage": stage})
+
+    @srv.tool(name="crm.log_activity", description="Log activity (note/email_outreach)")
+    def crm_log_activity(kind: str, contact_id: str | None = None, deal_id: str | None = None, note: str | None = None) -> dict[str, Any]:
+        return R().call_and_step("crm.log_activity", {"kind": kind, "contact_id": contact_id, "deal_id": deal_id, "note": note})
+
+    # --- Configurable alias packs (ERP) ---
+    packs_env = os.environ.get("VEI_ALIAS_PACKS", "xero").strip()
+    packs = [p.strip() for p in packs_env.split(",") if p.strip()]
+
+    def _register_alias(alias_name: str, base_tool: str) -> None:
+        # Register a thin passthrough tool dynamically
+        @srv.tool(name=alias_name, description=f"Alias → {base_tool}")
+        def _alias_passthrough(**kwargs: Any) -> dict[str, Any]:  # type: ignore[no-redef]
+            try:
+                return R().call_and_step(base_tool, dict(kwargs))
+            except MCPError as e:
+                return {"error": {"code": e.code, "message": e.message}}
+
+    for pack in packs:
+        for alias, base in ERP_ALIAS_PACKS.get(pack, []):
+            _register_alias(alias, base)
+
+    # CRM alias packs
+    crm_packs_env = os.environ.get("VEI_CRM_ALIAS_PACKS", "hubspot").strip()
+    crm_packs = [p.strip() for p in crm_packs_env.split(",") if p.strip()]
+    for pack in crm_packs:
+        for alias, base in CRM_ALIAS_PACKS.get(pack, []):
+            _register_alias(alias, base)
+
     @srv.tool(name="vei.observe", description="Get current observation summary + action menu")
     def vei_observe(focus: str | None = None) -> dict[str, Any]:
         return R().observe(focus_hint=focus).model_dump()
@@ -239,6 +353,13 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
     def vei_act_and_observe(tool: str, args: dict[str, Any] = Field(default_factory=dict)) -> dict[str, Any]:
         data = R().act_and_observe(tool, args)
         return data
+
+    @srv.tool(name="vei.call", description="Call any tool name with args via the VEI router")
+    def vei_call(tool: str, args: dict[str, Any] = Field(default_factory=dict)) -> dict[str, Any]:
+        try:
+            return R().call_and_step(tool, args)
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="vei.tick", description="Advance logical time by dt_ms and deliver due events")
     def vei_tick(dt_ms: int = 1000) -> dict[str, Any]:
@@ -279,6 +400,17 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
                 {"tool": "mail.open", "args": {"id": "str"}},
                 {"tool": "mail.compose", "args": {"to": "str", "subj": "str", "body_text": "str"}},
                 {"tool": "mail.reply", "args": {"id": "str", "body_text": "str"}},
+                {"tool": "erp.create_po", "args": {"vendor": "str", "currency": "str", "lines": "[{item_id,desc,qty,unit_price}]"}},
+                {"tool": "erp.list_pos", "args": {}},
+                {"tool": "erp.submit_invoice", "args": {"vendor": "str", "po_id": "str", "lines": "[{item_id,qty,unit_price}]"}},
+                {"tool": "erp.match_three_way", "args": {"po_id": "str", "invoice_id": "str", "receipt_id": "str?"}},
+                {"tool": "crm.create_contact", "args": {"email": "str", "first_name": "str?", "last_name": "str?", "do_not_contact": "bool?"}},
+                {"tool": "crm.create_company", "args": {"name": "str", "domain": "str?"}},
+                {"tool": "crm.associate_contact_company", "args": {"contact_id": "str", "company_id": "str"}},
+                {"tool": "crm.create_deal", "args": {"name": "str", "amount": "number", "stage": "str?", "contact_id": "str?", "company_id": "str?"}},
+                {"tool": "crm.update_deal_stage", "args": {"id": "str", "stage": "str"}},
+                {"tool": "crm.log_activity", "args": {"kind": "str", "contact_id": "str?", "deal_id": "str?", "note": "str?"}},
+                {"tool": "vei.call", "args": {"tool": "str", "args": "object"}},
             ],
             "examples": [
                 {"tool": "vei.observe", "args": {}},
@@ -288,6 +420,8 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
                 {"tool": "vei.ping", "args": {}},
                 {"tool": "vei.reset", "args": {"seed": 42042}},
                 {"tool": "vei.act_and_observe", "args": {"tool": "browser.read", "args": {}}},
+                {"tool": "vei.call", "args": {"tool": "erp.list_pos", "args": {}}},
+                {"tool": packs[0] + ".list_purchase_orders" if packs else "xero.list_purchase_orders", "args": {}},
             ],
         }
 

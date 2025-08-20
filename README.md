@@ -125,6 +125,48 @@ Troubleshooting:
 - If autostart fails silently, check `_vei_out/sse_autostart.log` for errors.
 - If your shell mangles `$` in tasks, quote or escape it (e.g., `"<$3200"` or `\$3200`).
 
+### Start the MCP server via CLI (with ERP aliases)
+```bash
+vei-serve --alias-packs xero,netsuite --erp-error-rate 0.0 \
+  --seed 42042 --artifacts-dir ./_vei_out --host 127.0.0.1 --port 3001
+```
+
+### ERP twin, alias packs, and scoring
+
+VEI includes a deterministic ERP twin with purchase orders, receipts, invoices, three‑way match, and payments.
+
+- Tools: `erp.create_po|get_po|list_pos|receive_goods|submit_invoice|get_invoice|list_invoices|match_three_way|post_payment`.
+- Alias packs: vendor‑style tool names that map to the ERP twin.
+  - Configure CSV via `VEI_ALIAS_PACKS`, e.g. `xero,netsuite,dynamics,quickbooks`.
+  - Examples: `xero.create_purchase_order` → `erp.create_po`, `netsuite.invoice.create` → `erp.submit_invoice`.
+- Error injection (no latency): set `VEI_ERP_ERROR_RATE=0.05` to occasionally return validation/payment errors deterministically.
+
+Score a Procure‑to‑Pay run:
+```bash
+vei-score-erp --artifacts-dir ./_vei_out/run_2025_08_17
+```
+
+
+### CRM twin, alias packs, and scoring
+
+VEI includes a deterministic CRM twin for lead→opportunity workflows.
+
+- Tools: `crm.create_contact|get_contact|list_contacts|create_company|get_company|list_companies|associate_contact_company|create_deal|get_deal|list_deals|update_deal_stage|log_activity`.
+- Alias packs: vendor‑style tool names mapped to the CRM twin.
+  - Configure CSV via `VEI_CRM_ALIAS_PACKS` (e.g., `hubspot,salesforce`).
+  - Examples: `hubspot.contacts.create` → `crm.create_contact`, `salesforce.opportunity.update_stage` → `crm.update_deal_stage`.
+- Error injection (no latency): set `VEI_CRM_ERROR_RATE=0.05` to occasionally return consent violations deterministically when contacting DNC leads.
+
+Serve with flags:
+```bash
+vei-serve --crm-alias-packs hubspot,salesforce --crm-error-rate 0.0   --alias-packs xero --erp-error-rate 0.0 --seed 42042 --artifacts-dir ./_vei_out
+```
+
+Score a CRM run:
+```bash
+vei-score-crm --artifacts-dir ./_vei_out/run_2025_08_17
+```
+
 ### LLM-friendly loop
 - Call `vei.observe` to get `{time_ms, focus, summary, action_menu, pending_events}`.
 - Choose one tool from `action_menu` (or any allowed tool) and call it.
@@ -137,6 +179,42 @@ Examples (MCP):
 - `mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}`
 
  
+
+### LLM models & API
+- GPT‑5 calls use the OpenAI Responses API (`client.responses.create`), not legacy Chat Completions.
+- No temperature or unsupported params are sent to GPT‑5/5‑mini.
+- Default prod model: `gpt-5`. Tests/smoke default: `gpt-5-mini` (override via `VEI_MODEL`).
+- MCP transport for dev/CI is stdio-only (no SSE required).
+
+Sample vei-llm-test transcript (gpt-5-mini, 6 steps)
+```json
+[
+  {
+    "observation": {
+      "time_ms": 1000,
+      "focus": "browser",
+      "summary": "Browser: MacroCompute — Home — Welcome to MacroCompute. Find laptops and specs.",
+      "screenshot_ref": null,
+      "action_menu": [
+        {"tool": "browser.click", "args": {"node_id": "CLICK:open_pdp#0"}, "name": "Open product page"},
+        {"tool": "browser.read", "args_schema": {}},
+        {"tool": "browser.find", "args_schema": {"query": "str", "top_k": "int?"}}
+      ],
+      "pending_events": {"slack": 0, "mail": 0}
+    }
+  },
+  {
+    "action": {
+      "tool": "browser.find",
+      "args": {"query": "laptop", "top_k": 5},
+      "result": {
+        "hits": [{"node_id": "CLICK:open_pdp#0", "role": "button", "name": "Open product page"}]
+      }
+    }
+  }
+]
+```
+
 
 ### Examples
 
@@ -165,7 +243,13 @@ python examples/llm_stdio_min.py        # minimal live LLM loop over stdio (no S
 - `slack.*`: `list_channels`, `open_channel`, `send_message`, `react`, `fetch_thread`.
 - `mail.*`: `list`, `open`, `compose`, `reply`.
 - `browser.*`: `open`, `find`, `click`, `type`, `submit`, `read`, `back`.
+- `erp.*`: `create_po`, `get_po`, `list_pos`, `receive_goods`, `submit_invoice`, `get_invoice`, `list_invoices`, `match_three_way`, `post_payment`.
 - `vei.*` helpers: `observe`, `act_and_observe`, `tick`, `pending`, `reset`.
+
+Alias examples (when enabled via `VEI_ALIAS_PACKS`):
+- `xero.create_purchase_order {vendor, currency, lines:[{item_id, desc, qty, unit_price}]}`
+- `netsuite.invoice.create {vendor, po_id, lines:[{item_id, qty, unit_price}]}`
+- Or generically: `vei.call {"tool":"xero.list_purchase_orders","args":{}}`
 
 ## Deterministic replay
 - Fixed seed + fixed artifacts + fixed build ⇒ identical tool payloads, event timings, DOM hashes, and screenshots.

@@ -11,9 +11,42 @@ from urllib.parse import urlparse
 import typer
 from dotenv import load_dotenv
 from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from openai import AsyncOpenAI
 from ._llm_loop import extract_plan
+
+
+def _normalize_result(res: object) -> dict:
+    # Accept raw dicts
+    if isinstance(res, dict):
+        return res
+    # MCP CallToolResult (structuredContent or content list)
+    sc = getattr(res, "structuredContent", None)
+    if sc is not None:
+        if isinstance(sc, dict):
+            return sc
+        # Some clients may return a list for structured content
+        try:
+            if sc and isinstance(sc, list):
+                return sc[0] if isinstance(sc[0], dict) else {"value": sc[0]}
+        except Exception:
+            ...
+    content = getattr(res, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            try:
+                t = item.get("type")
+                if t == "json" and "data" in item:
+                    return item["data"]
+                if t == "text" and "text" in item:
+                    import json as _json
+                    try:
+                        return _json.loads(item["text"])
+                    except Exception:
+                        return {"text": item["text"]}
+            except Exception:
+                continue
+    return {}
 
 app = typer.Typer(add_completion=False)
 
@@ -32,56 +65,72 @@ async def call_mcp_tool(session: ClientSession, tool: str, args: dict) -> dict:
 
 async def run_episode(
     model: str,
-    sse_url: str,
+    sse_url: str,  # kept for signature compatibility; ignored in stdio mode
     max_steps: int = 12,
     openai_base_url: str | None = None,
     openai_api_key: str | None = None,
     task: str | None = None,
 ) -> list[dict]:
-    async with sse_client(sse_url) as (read, write):
+    # stdio-only transport
+    py = os.environ.get("PYTHON", None) or (sys.executable if 'sys' in globals() else None)
+    if not py:
+        import sys as _sys
+        py = _sys.executable or "python3"
+    params = StdioServerParameters(command=py, args=["-m", "vei.router"], env={**os.environ, "VEI_DISABLE_AUTOSTART": "1"})
+    async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-        # Allow routing via OpenAI-compatible gateway
-        client = AsyncOpenAI(
-            base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
-            api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
-        )
-        messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if task:
-            messages.append({"role": "user", "content": f"Task: {task}"})
-        transcript: list[dict] = []
+            # OpenAI Responses API for gpt-5 family; no temperature parameter
+            client = AsyncOpenAI(
+                base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
+                api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
+            )
+            base_prompt = SYSTEM_PROMPT
+            if task:
+                base_prompt += f"\nTask: {task}"
+            transcript: list[dict] = []
 
-        for step in range(max_steps):
-            obs = await call_mcp_tool(session, "vei.observe", {})
-            transcript.append({"observation": obs})
-            menu = obs.get("action_menu", [])
-            # Build a concise prompt listing available actions
-            menu_text = "\n".join(
-                f"- {m.get('tool')} {json.dumps(m.get('args', m.get('args_schema', {})))}" for m in menu
-            )
-            user = (
-                f"Time: {obs.get('time_ms')}\nFocus: {obs.get('focus')}\nSummary: {obs.get('summary')}\n"
-                f"Pending: {json.dumps(obs.get('pending_events'))}\n"
-                f"Action menu (choose ONE tool and JSON args):\n{menu_text}\n"
-                "Reply STRICTLY as JSON with fields {\"tool\": str, \"args\": object}."
-            )
-            messages.append({"role": "user", "content": user})
-            chat = await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0,
-            )
-            raw = chat.choices[0].message.content or "{}"
-            # Attempt to extract a JSON object
-            plan = extract_plan(raw, default_tool="browser.read")
-            tool = plan.get("tool", "browser.read")
-            args = plan.get("args", {})
-            res = await call_mcp_tool(session, tool, args)
-            transcript.append({"action": {"tool": tool, "args": args, "result": res}})
-            messages.append({"role": "assistant", "content": json.dumps(plan)})
+            for step in range(max_steps):
+                obs_raw = await call_mcp_tool(session, "vei.observe", {})
+                obs = _normalize_result(obs_raw)
+                transcript.append({"observation": obs})
+                menu = obs.get("action_menu", [])
+                menu_text = "\n".join(
+                    f"- {m.get('tool')} {json.dumps(m.get('args', m.get('args_schema', {})))}" for m in menu
+                )
+                user = (
+                    f"Time: {obs.get('time_ms')}\nFocus: {obs.get('focus')}\nSummary: {obs.get('summary')}\n"
+                    f"Pending: {json.dumps(obs.get('pending_events'))}\n"
+                    f"Action menu (choose ONE tool and JSON args):\n{menu_text}\n"
+                    "Reply STRICTLY as JSON with fields {\"tool\": str, \"args\": object}."
+                )
+                # Responses API call; enforce JSON object output
+                resp = await client.responses.create(
+                    model=model,
+                    input=f"{base_prompt}\n\n{user}\nReturn a JSON object only.",
+                )
+                raw = getattr(resp, "output_text", None)
+                if not raw:
+                    # Fallback traversal of SDK response
+                    try:
+                        out = getattr(resp, "output", [])
+                        if out and hasattr(out[0], "content"):
+                            cnt = out[0].content
+                            if cnt and hasattr(cnt[0], "text"):
+                                raw = cnt[0].text
+                    except Exception:
+                        raw = "{}"
+                if not raw:
+                    raw = "{}"
+                plan = extract_plan(raw, default_tool="browser.read")
+                tool = plan.get("tool", "browser.read")
+                args = plan.get("args", {})
+                res_raw = await call_mcp_tool(session, tool, args)
+                res = _normalize_result(res_raw)
+                transcript.append({"action": {"tool": tool, "args": args, "result": res}})
 
-        return transcript
+            return transcript
 
 
 def _ensure_sse_available(sse_url: str, autostart: bool) -> None:
@@ -115,21 +164,18 @@ def _ensure_sse_available(sse_url: str, autostart: bool) -> None:
 @app.command()
 def run(
     model: str = typer.Option("gpt-5", help="OpenAI model id (see latest-model guide)"),
-    sse_url: str = typer.Option(os.environ.get("VEI_SSE_URL", "http://127.0.0.1:3001/sse"), help="MCP SSE endpoint (GET)"),
     openai_base_url: str | None = typer.Option(None, help="Override OPENAI_BASE_URL for SDK (OpenAI-compatible)"),
     openai_api_key: str | None = typer.Option(None, help="Override OPENAI_API_KEY for SDK"),
     max_steps: int = typer.Option(12, help="Max tool steps"),
-    autostart: bool = typer.Option(True, help="Auto-start local VEI SSE server if not reachable"),
     task: str | None = typer.Option(None, help="High-level goal for the LLM (prefixed as 'Task: ...')"),
 ) -> None:
     load_dotenv(override=True)
     if not os.getenv("OPENAI_API_KEY"):
         raise typer.BadParameter("OPENAI_API_KEY not set (put it in .env)")
-    _ensure_sse_available(sse_url, autostart)
     transcript = asyncio.run(
         run_episode(
             model=model,
-            sse_url=sse_url,
+            sse_url="",  # unused in stdio mode
             max_steps=max_steps,
             openai_base_url=openai_base_url,
             openai_api_key=openai_api_key,
