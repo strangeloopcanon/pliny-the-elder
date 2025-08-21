@@ -66,7 +66,7 @@ async def loop(
     task: str | None,
     timeout_s: int,
     ) -> list[dict[str, Any]]:
-    transport = (transport or "sse").strip().lower()
+    transport = (transport or "stdio").strip().lower()
     if transport == "stdio":
         import sys as _sys
         env = os.environ.copy()
@@ -152,7 +152,7 @@ async def loop(
 @app.command()
 def run(
     model: str = typer.Option("gpt-5", help="OpenAI model id"),
-    transport: str = typer.Option("sse", help="Transport: sse or stdio"),
+    transport: str = typer.Option("stdio", help="Transport: sse or stdio"),
     sse_url: str = typer.Option(os.environ.get("VEI_SSE_URL", "http://127.0.0.1:3001/sse"), help="MCP SSE endpoint"),
     max_steps: int = typer.Option(12, help="Max tool steps"),
     artifacts_dir: str | None = typer.Option(None, help="Artifacts directory for server trace (set VEI_ARTIFACTS_DIR too)"),
