@@ -23,6 +23,25 @@ async def run_once(
     transport: str = "stdio",
     sse_url: str | None = None,
 ) -> dict[str, Any]:
+    # Normalize MCP CallToolResult objects into JSON-safe dicts
+    def _normalize_result(res: Any) -> dict:
+        try:
+            if getattr(res, "isError", False):
+                return {"error": True, "content": getattr(res, "content", None)}
+            sc = getattr(res, "structuredContent", None)
+            if sc is not None:
+                return sc
+            content = getattr(res, "content", None)
+            if content and isinstance(content, list) and getattr(content[0], "text", None):
+                import json as _json
+                txt = content[0].text
+                try:
+                    return _json.loads(txt)
+                except Exception:
+                    return {"text": txt}
+            return {"result": res}
+        except Exception:
+            return {"result": str(res)}
     transport = (transport or "stdio").strip().lower()
     if transport == "sse":
         # Ensure server is up if a URL is given
@@ -41,31 +60,36 @@ async def run_once(
             out: dict[str, Any] = {"steps": []}
 
             # Observe
-            obs = await session.call_tool("vei.observe", {})
+            obs_raw = await session.call_tool("vei.observe", {})
+            obs = _normalize_result(obs_raw)
             out["steps"].append({"vei.observe": obs})
             typer.echo(json.dumps({"vei.observe": obs}))
 
             # Read browser
-            res = await session.call_tool("browser.read", {})
+            res_raw = await session.call_tool("browser.read", {})
+            res = _normalize_result(res_raw)
             out["steps"].append({"browser.read": res})
             typer.echo(json.dumps({"browser.read": res}))
 
             # Send slack summary
-            res = await session.call_tool("slack.send_message", {"channel": "#procurement", "text": "Posting summary for approval"})
+            res_raw = await session.call_tool("slack.send_message", {"channel": "#procurement", "text": "Posting summary for approval"})
+            res = _normalize_result(res_raw)
             out["steps"].append({"slack.send_message": res})
             typer.echo(json.dumps({"slack.send_message": res}))
 
             # Compose email
-            res = await session.call_tool(
+            res_raw = await session.call_tool(
                 "mail.compose",
                 {"to": "sales@macrocompute.example", "subj": "Quote request", "body_text": "Please send latest price and ETA."},
             )
+            res = _normalize_result(res_raw)
             out["steps"].append({"mail.compose": res})
             typer.echo(json.dumps({"mail.compose": res}))
 
             # Tick observe until events drain (max 20 steps)
             for _ in range(20):
-                obs = await session.call_tool("vei.observe", {})
+                obs_raw = await session.call_tool("vei.observe", {})
+                obs = _normalize_result(obs_raw)
                 out["steps"].append({"vei.observe": obs})
                 typer.echo(json.dumps({"vei.observe": obs}))
                 pending = obs.get("pending_events", {})

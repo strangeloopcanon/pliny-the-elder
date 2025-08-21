@@ -163,6 +163,26 @@ def run(
                     )
                     if verbose:
                         typer.echo(f"LLM base_url={'default' if not effective_base_url else effective_base_url}")
+                    # Helper: normalize MCP CallToolResult into JSON-safe dicts
+                    def _normalize_result(res: Any) -> dict:
+                        try:
+                            if getattr(res, "isError", False):
+                                return {"error": True, "content": getattr(res, "content", None)}
+                            sc = getattr(res, "structuredContent", None)
+                            if sc is not None:
+                                return sc
+                            content = getattr(res, "content", None)
+                            if content and isinstance(content, list) and getattr(content[0], "text", None):
+                                import json as _json
+                                txt = content[0].text
+                                try:
+                                    return _json.loads(txt)
+                                except Exception:
+                                    return {"text": txt}
+                            return {"result": res}
+                        except Exception:
+                            return {"result": str(res)}
+
                     messages: list[dict] = [
                         {
                             "role": "system",
@@ -176,7 +196,8 @@ def run(
                         messages.append({"role": "user", "content": f"Task: {task}"})
                     # Simple 1-tool-per-step loop
                     for i in range(max_steps):
-                        obs = await _call(s, "vei.observe", {})
+                        obs_raw = await _call(s, "vei.observe", {})
+                        obs = _normalize_result(obs_raw)
                         transcript.append({"observation": obs})
                         _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
                         _print_observation(verbose, obs)
@@ -248,7 +269,8 @@ def run(
                         tool = str(plan.get("tool"))
                         args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
                         try:
-                            result = await _call(s, tool, args)
+                            result_raw = await _call(s, tool, args)
+                            result = _normalize_result(result_raw)
                         except Exception as e:
                             result = {"error": str(e)}
                         transcript.append({"action": {"tool": tool, "args": args, "result": result}})
@@ -261,7 +283,8 @@ def run(
                         if tool in {"mail.compose", "slack.send_message"}:
                             try:
                                 await _call(s, "vei.tick", {"dt_ms": 20000})
-                                obs2 = await _call(s, "vei.observe", {})
+                                obs2_raw = await _call(s, "vei.observe", {})
+                                obs2 = _normalize_result(obs2_raw)
                                 transcript.append({"observation": obs2})
                                 _append_transcript_line({"observation": obs2}, os.environ.get("VEI_ARTIFACTS_DIR"))
                                 _print_observation(verbose, obs2)
@@ -311,10 +334,32 @@ def run(
                             raise
                         if verbose:
                             typer.echo("MCP session initialized.")
-                        obs = await _call(s, "vei.observe", {})
+                        # Local normalizer mirrors LLM branch
+                        def _normalize_result(res: Any) -> dict:
+                            try:
+                                if getattr(res, "isError", False):
+                                    return {"error": True, "content": getattr(res, "content", None)}
+                                sc = getattr(res, "structuredContent", None)
+                                if sc is not None:
+                                    return sc
+                                content = getattr(res, "content", None)
+                                if content and isinstance(content, list) and getattr(content[0], "text", None):
+                                    import json as _json
+                                    txt = content[0].text
+                                    try:
+                                        return _json.loads(txt)
+                                    except Exception:
+                                        return {"text": txt}
+                                return {"result": res}
+                            except Exception:
+                                return {"result": str(res)}
+
+                        obs_raw = await _call(s, "vei.observe", {})
+                        obs = _normalize_result(obs_raw)
                         transcript.append({"observation": obs})
                         _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
-                        res = await _call(s, "browser.read", {})
+                        res_raw = await _call(s, "browser.read", {})
+                        res = _normalize_result(res_raw)
                         transcript.append({"action": {"tool": "browser.read", "args": {}, "result": res}})
                         _append_transcript_line(
                             {"action": {"tool": "browser.read", "args": {}, "result": res}}, os.environ.get("VEI_ARTIFACTS_DIR")
@@ -324,11 +369,12 @@ def run(
                             "slack.send_message",
                             {"channel": "#procurement", "text": "Summary: budget $3200, citations included."},
                         )
+                        res_n = _normalize_result(res)
                         transcript.append(
-                            {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}}
+                            {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res_n}}
                         )
                         _append_transcript_line(
-                            {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res}},
+                            {"action": {"tool": "slack.send_message", "args": {"channel": "#procurement"}, "result": res_n}},
                             os.environ.get("VEI_ARTIFACTS_DIR"),
                         )
                         res = await _call(
@@ -340,15 +386,17 @@ def run(
                                 "body_text": "Please send latest price and ETA.",
                             },
                         )
+                        res_n = _normalize_result(res)
                         transcript.append(
-                            {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}}
+                            {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res_n}}
                         )
                         _append_transcript_line(
-                            {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res}},
+                            {"action": {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example"}, "result": res_n}},
                             os.environ.get("VEI_ARTIFACTS_DIR"),
                         )
                         for _ in range(24):
-                            obs = await _call(s, "vei.observe", {"focus": "mail"})
+                            obs_raw = await _call(s, "vei.observe", {"focus": "mail"})
+                            obs = _normalize_result(obs_raw)
                             transcript.append({"observation": obs})
                             _append_transcript_line({"observation": obs}, os.environ.get("VEI_ARTIFACTS_DIR"))
                             pend = obs.get("pending_events", {})

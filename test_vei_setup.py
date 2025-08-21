@@ -126,7 +126,6 @@ def test_environment():
     if all_passed:
         print(f"{GREEN}✓ All critical checks passed!{RESET}")
         print(f"\nYou can now run:")
-        print(f"  {BLUE}python run_vei_gpt5_demo.py{RESET}")
         print(f"  {BLUE}vei-demo --mode llm --model gpt-5{RESET}")
         print(f"  {BLUE}vei-chat --model gpt-5{RESET}")
     else:

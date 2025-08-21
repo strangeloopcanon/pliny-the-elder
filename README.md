@@ -35,8 +35,9 @@ Agent ──MCP──► VEI Router (this repo)
 
 ### Install
 ```bash
-pip install -e ".[llm,browser,sse]"
+pip install -e ".[llm,sse]"
 ```
+Optional: add `[browser]` only for live browser automation (Playwright).
 
 ### Configure
 Create a `.env` at the repo root:
@@ -73,12 +74,7 @@ python tests/test_vei_transports.py
 ```
 
 ### Run the demo
-- Option A: Demo script
-```bash
-python run_vei_gpt5_demo.py
-```
-
-- Option B: VEI CLI tools
+Use the VEI CLI tools
 ```bash
 # Interactive chat (SSE by default). Use stdio if SSE is blocked or for local dev.
 vei-chat --model gpt-5 --max-steps 15
@@ -109,6 +105,7 @@ Artifacts: the LLM test writes a `trace.jsonl` to `VEI_ARTIFACTS_DIR` if set, or
 Notes:
 - The LLM test is included in the full suite and runs automatically when `OPENAI_API_KEY` is available (`python -m pytest -q`).
 - Customize the LLM test via env vars: set `VEI_MODEL` (e.g., `gpt-5`) and `LLM_SMOKE_PROMPT` to override the system prompt.
+ - If your `.env` contains a placeholder or invalid `OPENAI_API_KEY`, the LLM test may attempt to run and fail; unset it to skip or set a valid key.
 
 ### Start the MCP server (manual, optional)
 ```bash
