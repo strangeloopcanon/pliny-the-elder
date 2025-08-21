@@ -31,7 +31,7 @@ Agent ──MCP──► VEI Router (this repo)
 
 ### Prerequisites
 - Python 3.11+
-- OpenAI API key with access to `gpt-5`
+- OpenAI API key (only for LLM demos/tests). Smoke tests and stdio transport do not require a key.
 
 ### Install
 ```bash
@@ -60,7 +60,7 @@ python test_vei_setup.py
 ```
 You should see “All critical checks passed!”. The SSE server may show as “Not running”; it auto-starts when you run a demo.
 
-### Transport smoke tests (MCP stdio and SSE)
+### Transport smoke tests (stdio first; SSE optional)
 Quick end-to-end checks without an API key:
 ```bash
 # StdIO MCP transport (spawns python -m vei.router)
@@ -76,9 +76,10 @@ python tests/test_vei_transports.py
 ### Run the demo
 Use the VEI CLI tools
 ```bash
-# Interactive chat (SSE by default). Use stdio if SSE is blocked or for local dev.
-vei-chat --model gpt-5 --max-steps 15
+# Interactive chat (stdio default; SSE optional)
 vei-chat --model gpt-5 --max-steps 15 --transport stdio --timeout-s 45
+# Or explicitly use SSE (requires local SSE or remote server)
+vei-chat --model gpt-5 --max-steps 15 --transport sse --timeout-s 45
 
 # Automated test
 vei-llm-test --model gpt-5 \
@@ -96,22 +97,22 @@ Prefer invoking pytest via the active interpreter to avoid host shims:
 ```bash
 python -m pytest -q
 ```
-Live LLM test (requires `.env` with `OPENAI_API_KEY`; tests auto-load `.env`):
+Live LLM test (uses stdio; requires `.env` with `OPENAI_API_KEY`):
 ```bash
 python -m pytest -q -k llm_stdio_smoke
 ```
 Artifacts: the LLM test writes a `trace.jsonl` to `VEI_ARTIFACTS_DIR` if set, or to a temp directory otherwise. A copy is saved under `.artifacts/llm_stdio_smoke_trace.jsonl`, and the last lines are echoed to the console for quick inspection.
 
 Notes:
-- The LLM test is included in the full suite and runs automatically when `OPENAI_API_KEY` is available (`python -m pytest -q`).
-- Customize the LLM test via env vars: set `VEI_MODEL` (e.g., `gpt-5`) and `LLM_SMOKE_PROMPT` to override the system prompt.
- - If your `.env` contains a placeholder or invalid `OPENAI_API_KEY`, the LLM test may attempt to run and fail; unset it to skip or set a valid key.
+- The LLM test uses MCP stdio (no SSE required) and is included in the full suite; it runs automatically when `OPENAI_API_KEY` is available (`python -m pytest -q`).
+- Customize via env: `VEI_MODEL` (e.g., `gpt-5`), `LLM_SMOKE_PROMPT` to override the system prompt.
+- If your `.env` contains a placeholder or invalid `OPENAI_API_KEY`, the LLM test may attempt to run and fail; unset it to skip or set a valid key.
 
 ### Start the MCP server (manual, optional)
 ```bash
 VEI_SEED=42042 python -m vei.router.sse
 ```
-SSE endpoints (FastMCP defaults):
+SSE endpoints (FastMCP defaults; only needed if using `--transport sse` or an HTTP client):
 - Stream: `http://127.0.0.1:3001/sse`
 - Messages: `http://127.0.0.1:3001/messages/`
 
@@ -235,6 +236,11 @@ python examples/llm_stdio_min.py        # minimal live LLM loop over stdio (no S
 ### Transports: stdio vs SSE
 - **Stdio (recommended for local/CI)**: No open ports, same tools/capabilities. Use `--transport stdio` with CLI or run `examples/llm_stdio_min.py`.
 - **SSE (optional)**: Needed only for HTTP-based clients or remote hosting. Default endpoints `/sse` and `/messages/`.
+
+### MCP Compatibility
+- Implements Anthropic MCP via FastMCP.
+- Supports stdio (default) and SSE transports.
+- Tool schemas defined via Pydantic; clients receive structured args/returns.
 
 ## MCP tools
 - `slack.*`: `list_channels`, `open_channel`, `send_message`, `react`, `fetch_thread`.
