@@ -54,7 +54,12 @@ def _ensure_sse_available(sse_url: str, autostart: bool) -> bool:
     env.setdefault("VEI_HOST", host)
     env.setdefault("VEI_PORT", str(port))
     # Propagate artifacts/scenario to the spawned server so traces are written
-    for key in ("VEI_ARTIFACTS_DIR", "VEI_SCENARIO_NAME", "VEI_SCENARIO_FILE", "VEI_SCENARIO_JSON"):
+    for key in (
+        "VEI_ARTIFACTS_DIR",
+        "VEI_SCENARIO",
+        "VEI_SCENARIO_CONFIG",
+        "VEI_SCENARIO_RANDOM",
+    ):
         val = os.environ.get(key)
         if val:
             env[key] = val
@@ -163,6 +168,34 @@ def run(
                     )
                     if verbose:
                         typer.echo(f"LLM base_url={'default' if not effective_base_url else effective_base_url}")
+                    # Define a JSON schema for plan outputs to increase reliability while preserving freedom
+                    allowed_tools = [
+                        "vei.observe",
+                        "vei.tick",
+                        "vei.help",
+                        "browser.read",
+                        "browser.find",
+                        "browser.open",
+                        "browser.click",
+                        "browser.back",
+                        "slack.send_message",
+                        "mail.compose",
+                        "mail.list",
+                        "mail.open",
+                        "mail.reply",
+                    ]
+                    plan_schema = {
+                        "name": "vei.plan.schema",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["tool", "args"],
+                            "properties": {
+                                "tool": {"type": "string", "enum": allowed_tools},
+                                "args": {"type": "object"},
+                            },
+                        },
+                    }
                     # Helper: normalize MCP CallToolResult into JSON-safe dicts
                     def _normalize_result(res: Any) -> dict:
                         try:
@@ -187,8 +220,9 @@ def run(
                         {
                             "role": "system",
                             "content": (
-                                "You are a planner that MUST return a non-empty JSON object with keys \"tool\" (string) and \"args\" (object). "
-                                "If uncertain, return {\"tool\":\"vei.observe\",\"args\":{}}. Reply with JSON only."
+                                "You are a planner that MUST return a JSON object with keys \"tool\" and \"args\". "
+                                "Use MCP tools to achieve the task. You may call any of: vei.* (observe,tick), browser.*, slack.*, mail.*. "
+                                "The action_menu suggests common actions for the current focus but is not exhaustive. Reply with JSON only."
                             ),
                         }
                     ]
@@ -224,16 +258,31 @@ def run(
                         try:
                             if verbose:
                                 typer.echo("LLM: requesting plan via Responses API…")
-                            resp = await asyncio.wait_for(
-                                client.responses.create(
-                                    model=model,
-                                    input=prompt,
-                                    # temperature is not supported by gpt-5 responses
-                                    max_output_tokens=256,
-                                    reasoning={"effort": "high"},
-                                ),
-                                timeout=timeout_s,
-                            )
+                            # Try with JSON schema enforcement first; fall back if unsupported
+                            try:
+                                resp = await asyncio.wait_for(
+                                    client.responses.create(
+                                        model=model,
+                                        input=prompt,
+                                        response_format={
+                                            "type": "json_schema",
+                                            "json_schema": plan_schema,
+                                        },
+                                        max_output_tokens=256,
+                                        reasoning={"effort": "high"},
+                                    ),
+                                    timeout=timeout_s,
+                                )
+                            except Exception:
+                                resp = await asyncio.wait_for(
+                                    client.responses.create(
+                                        model=model,
+                                        input=prompt,
+                                        max_output_tokens=256,
+                                        reasoning={"effort": "high"},
+                                    ),
+                                    timeout=timeout_s,
+                                )
                             raw = getattr(resp, "output_text", None)
                             if not raw:
                                 out = getattr(resp, "output", None)
@@ -265,34 +314,76 @@ def run(
                         plan = extract_plan(raw, default_tool="vei.observe")
                         # Enforce non-empty JSON plan shape; default and log when empty/invalid
                         if not isinstance(plan, dict) or not plan.get("tool"):
-                            plan = {"tool": "vei.observe", "args": {}}
+                            # One-shot retry with terse corrective if model returned invalid content
+                            if verbose:
+                                typer.echo("LLM: invalid/empty plan; retrying once with corrective hint")
+                            try:
+                                retry_prompt = prompt + "\nReturn a strict JSON object with keys tool (enum) and args (object)."
+                                resp2 = await asyncio.wait_for(
+                                    client.responses.create(
+                                        model=model,
+                                        input=retry_prompt,
+                                        response_format={
+                                            "type": "json_schema",
+                                            "json_schema": plan_schema,
+                                        },
+                                        max_output_tokens=192,
+                                    ),
+                                    timeout=max(8, timeout_s // 2),
+                                )
+                                raw2 = getattr(resp2, "output_text", None) or "{}"
+                                plan = extract_plan(raw2, default_tool="vei.observe")
+                            except Exception:
+                                plan = {"tool": "vei.observe", "args": {}}
                         tool = str(plan.get("tool"))
                         args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
-                        try:
-                            result_raw = await _call(s, tool, args)
-                            result = _normalize_result(result_raw)
-                        except Exception as e:
-                            result = {"error": str(e)}
-                        transcript.append({"action": {"tool": tool, "args": args, "result": result}})
-                        _append_transcript_line(
-                            {"action": {"tool": tool, "args": args, "result": result}}, os.environ.get("VEI_ARTIFACTS_DIR")
-                        )
-                        _print_action(verbose, tool, args, result)
-
-                        # Auto-drain pending events after key actions to ensure bounded runs
-                        if tool in {"mail.compose", "slack.send_message"}:
+                        if tool not in allowed_tools:
+                            if verbose:
+                                typer.echo(f"LLM: unsupported tool '{tool}', falling back to vei.observe")
+                            tool, args = "vei.observe", {}
+                        if tool == "vei.observe":
                             try:
-                                await _call(s, "vei.tick", {"dt_ms": 20000})
-                                obs2_raw = await _call(s, "vei.observe", {})
-                                obs2 = _normalize_result(obs2_raw)
+                                result_raw = await _call(s, tool, args)
+                                result = _normalize_result(result_raw)
+                            except Exception as e:
+                                result = {"error": str(e)}
+                            transcript.append({"action": {"tool": tool, "args": args, "result": result}})
+                            _append_transcript_line(
+                                {"action": {"tool": tool, "args": args, "result": result}}, os.environ.get("VEI_ARTIFACTS_DIR")
+                            )
+                            _print_action(verbose, tool, args, result)
+                        else:
+                            # Execute and observe in one deterministic step
+                            try:
+                                ao_raw = await _call(s, "vei.act_and_observe", {"tool": tool, "args": args})
+                                ao = _normalize_result(ao_raw)
+                                result = ao.get("result", ao)
+                                obs2 = ao.get("observation")
+                            except Exception as e:
+                                result = {"error": str(e)}
+                                obs2 = None
+                            transcript.append({"action": {"tool": tool, "args": args, "result": result}})
+                            _append_transcript_line({"action": {"tool": tool, "args": args, "result": result}}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                            _print_action(verbose, tool, args, result)
+                            if isinstance(obs2, dict):
                                 transcript.append({"observation": obs2})
                                 _append_transcript_line({"observation": obs2}, os.environ.get("VEI_ARTIFACTS_DIR"))
                                 _print_observation(verbose, obs2)
-                                p2 = obs2.get("pending_events", {})
-                                if p2.get("mail", 0) == 0 and p2.get("slack", 0) == 0:
-                                    break
-                            except Exception:
-                                ...
+
+                            # Auto-drain pending events after key actions to ensure bounded runs
+                            if tool in {"mail.compose", "slack.send_message"}:
+                                try:
+                                    await _call(s, "vei.tick", {"dt_ms": 20000})
+                                    obs3_raw = await _call(s, "vei.observe", {})
+                                    obs3 = _normalize_result(obs3_raw)
+                                    transcript.append({"observation": obs3})
+                                    _append_transcript_line({"observation": obs3}, os.environ.get("VEI_ARTIFACTS_DIR"))
+                                    _print_observation(verbose, obs3)
+                                    p3 = obs3.get("pending_events", {})
+                                    if p3.get("mail", 0) == 0 and p3.get("slack", 0) == 0:
+                                        break
+                                except Exception:
+                                    ...
                     return transcript
 
         try:

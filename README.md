@@ -198,6 +198,36 @@ Examples (MCP):
 - GPT‑5 calls use the OpenAI Responses API (`client.responses.create`), not legacy Chat Completions.
 - No temperature or unsupported params are sent to GPT‑5/5‑mini.
 - Default prod model: `gpt-5`. Tests/smoke default: `gpt-5-mini` (override via `VEI_MODEL`).
+
+## LLM Evaluation & Scoring (gpt‑5)
+
+- **Objective**: Research product details (citations), post approval to `#procurement` (<$3200), email the vendor for a quote, and parse the vendor reply (price + ETA).
+- **Transport**: MCP stdio (`python -m vei.router`) for determinism and CI friendliness.
+- **Artifacts**: Set `VEI_ARTIFACTS_DIR` to a clean directory. The router writes `trace.jsonl` there; CLIs may also write a human‑readable transcript.
+- **Scoring**: `vei-score` evaluates `trace.jsonl` for subgoals: `citations`, `approval`, `email_sent`, `email_parsed`. Success requires all in `full` mode.
+
+Run a “real” gpt‑5 test and score it
+```bash
+export VEI_ARTIFACTS_DIR=_vei_out/gpt5_llmtest
+VEI_SEED=42042 vei-llm-test \
+  --model gpt-5 \
+  --max-steps 32 \
+  --task "Open product page, read specs, post approval to #procurement (budget $3200; include citations), email sales@macrocompute.example for quote, then wait for the reply."
+
+vei-score --artifacts-dir _vei_out/gpt5_llmtest --success-mode full
+```
+
+Notes on model behavior and failure modes
+- **Empty/observe plans**: If the model outputs `{}` or explicitly chooses `vei.observe`, no tool call is executed and no `trace.jsonl` entry is produced. This is not a transport failure, but the episode will not reach success and scoring will return `success: false`.
+- **Time advancement**: Vendor replies are scheduled ~15s after `mail.compose`. Each `call_and_step` advances time by 1000 ms, so expect ~15 additional steps (or call `vei.tick`) before the reply arrives.
+- **Demo loop vs llm-test**:
+  - `vei-demo --mode llm` auto‑advances time after `mail.compose`/`slack.send_message`, which can reduce required steps.
+  - `vei-llm-test` takes the model’s plan literally; ensure `--max-steps` is high enough for email and reply.
+- **Determinism**: Runs are deterministic under a fixed `VEI_SEED`. Reuse the same seed and artifacts dir to reproduce behavior.
+
+Troubleshooting
+- If scoring shows zero actions, inspect the transcript to confirm whether the model only issued `vei.observe` (a no‑op). Re‑run or increase `--max-steps`.
+- If using a custom gateway, add `--openai-base-url default` to force the OpenAI Responses endpoint.
 - MCP transport for dev/CI is stdio-only (no SSE required).
 
 Sample vei-llm-test transcript (gpt-5-mini, 6 steps)
@@ -244,7 +274,7 @@ python examples/llm_stdio_min.py        # minimal live LLM loop over stdio (no S
 - **Artifacts**: `VEI_ARTIFACTS_DIR=/abs/out` writes `trace.jsonl`.
 - **Transcript**: `VEI_TRANSCRIPT_OUT=/abs/transcript.json` to save transcript JSON (used by `examples/llm_stdio_min.py`).
 - **Streaming**: `VEI_TRACE_POST_URL=https://collector.example/trace` streams entries (best-effort POST).
-- **Scenarios**: `VEI_SCENARIO_NAME`, or `VEI_SCENARIO_FILE=/abs/scenario.json`, or `VEI_SCENARIO_JSON='{"budget_cap_usd":3200,...}'`.
+- **Scenarios**: set `VEI_SCENARIO` to a catalog name, `VEI_SCENARIO_CONFIG` to JSON or a file path for a template, or `VEI_SCENARIO_RANDOM=1` to pick a random catalog entry.
 - **OpenAI-compatible routing**: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`.
 - **CLI overrides**: `--openai-base-url`, `--openai-api-key`.
 - **Autostart**: set `VEI_DISABLE_AUTOSTART=1` to prevent background SSE startup.
@@ -294,16 +324,17 @@ vei-score --artifacts-dir ./_vei_out/run_20240115_143022
 Evaluates task completion, subgoals, costs (action count), provenance, and constraint compliance.
 
 ## Scenarios
-- Built-in names (set `VEI_SCENARIO_NAME`):
+- Built-in names (set `VEI_SCENARIO`):
   - `macrocompute_default` — minimal world (home → pdp → specs).
   - `extended_store` — adds a category page with two products.
-- Provide your own via `VEI_SCENARIO_FILE` or `VEI_SCENARIO_JSON`.
+- Provide your own via `VEI_SCENARIO_CONFIG` (JSON string or file path).
 
 ### Advanced usage
 - Custom scenarios via env/file:
 ```bash
-export VEI_SCENARIO_JSON='{"budget_cap_usd": 5000, "products": [...]}'
-export VEI_SCENARIO_FILE=/path/to/scenario.json
+export VEI_SCENARIO_CONFIG='{"budget_cap_usd": 5000, "vendors": [...]}'
+export VEI_SCENARIO_CONFIG=/path/to/template.json
+export VEI_SCENARIO_RANDOM=1  # choose random catalog scenario
 ```
 - Deterministic runs:
 ```bash
