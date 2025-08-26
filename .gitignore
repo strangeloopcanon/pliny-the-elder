@@ -132,6 +132,7 @@ Thumbs.db
 .ipynb_checkpoints/
 # Env files (never commit secrets)
 .env
+.env.bak
 .envrc
 # Node
 node_modules/

@@ -4,6 +4,7 @@ import json
 
 from vei.router.core import Router
 from vei.world.scenarios import generate_scenario
+from vei.config import Config
 
 
 def test_generate_scenario_and_derail(monkeypatch):
@@ -50,4 +51,20 @@ def test_load_scenario_from_env(tmp_path, monkeypatch):
     r = Router(seed=1, artifacts_dir=None)
     assert r.scenario.vendor_reply_variants is not None
     assert any("EnvVendor" in v for v in r.scenario.vendor_reply_variants)
+    monkeypatch.delenv("VEI_SCENARIO_CONFIG", raising=False)
+
+
+def test_config_from_env(tmp_path, monkeypatch):
+    template = {
+        "budget_cap_usd": 2500,
+        "vendors": [{"name": "CfgVendor", "price": [900, 1000], "eta_days": [4, 4]}],
+    }
+    path = tmp_path / "cfg.json"
+    path.write_text(json.dumps(template))
+    monkeypatch.setenv("VEI_SCENARIO_CONFIG", str(path))
+    cfg = Config.from_env()
+    assert cfg.scenario is not None
+    assert any(
+        "CfgVendor" in v for v in (cfg.scenario.vendor_reply_variants or [])
+    )
     monkeypatch.delenv("VEI_SCENARIO_CONFIG", raising=False)

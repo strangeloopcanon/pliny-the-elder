@@ -74,7 +74,12 @@ async def loop(
         env["VEI_DISABLE_AUTOSTART"] = "1"
         env.setdefault("PYTHONUNBUFFERED", "1")
         # Propagate artifacts/scenario if provided so traces are written
-        for key in ("VEI_ARTIFACTS_DIR", "VEI_SCENARIO_NAME", "VEI_SCENARIO_FILE", "VEI_SCENARIO_JSON"):
+        for key in (
+            "VEI_ARTIFACTS_DIR",
+            "VEI_SCENARIO",
+            "VEI_SCENARIO_CONFIG",
+            "VEI_SCENARIO_RANDOM",
+        ):
             if os.environ.get(key):
                 env[key] = os.environ[key]
         params = StdioServerParameters(command=_sys.executable or "python3", args=["-m", "vei.router"], env=env)

@@ -54,8 +54,9 @@ app = typer.Typer(add_completion=False)
 SYSTEM_PROMPT = (
     "You are an assistant controlling tools via MCP in a synthetic enterprise world. "
     "Each step: first call 'vei.observe' to see the action_menu, then pick exactly one tool to call. "
-    "Goal: research the product page, send a Slack approval summary to #procurement, compose a vendor email,"
-    " and wait for the reply (may take multiple observe steps). Keep steps minimal."
+    "You may call any of: vei.* (observe,tick), browser.*, slack.*, mail.* as needed to accomplish the task. "
+    "Goal: research the product page, send a Slack approval summary to #procurement, compose a vendor email, and wait for the reply. "
+    "Reply with JSON only. Keep steps minimal."
 )
 
 
@@ -86,6 +87,34 @@ async def run_episode(
                 base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
                 api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
             )
+            # Enumerate allowed tools for schema enforcement
+            allowed_tools = [
+                "vei.observe",
+                "vei.tick",
+                "vei.help",
+                "browser.read",
+                "browser.find",
+                "browser.open",
+                "browser.click",
+                "browser.back",
+                "slack.send_message",
+                "mail.compose",
+                "mail.list",
+                "mail.open",
+                "mail.reply",
+            ]
+            plan_schema = {
+                "name": "vei.plan.schema",
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["tool", "args"],
+                    "properties": {
+                        "tool": {"type": "string", "enum": allowed_tools},
+                        "args": {"type": "object"},
+                    },
+                },
+            }
             base_prompt = SYSTEM_PROMPT
             if task:
                 base_prompt += f"\nTask: {task}"
@@ -106,10 +135,21 @@ async def run_episode(
                     "Reply STRICTLY as JSON with fields {\"tool\": str, \"args\": object}."
                 )
                 # Responses API call; enforce JSON object output
-                resp = await client.responses.create(
-                    model=model,
-                    input=f"{base_prompt}\n\n{user}\nReturn a JSON object only.",
-                )
+                # Try with a JSON schema; fall back if unsupported
+                try:
+                    resp = await client.responses.create(
+                        model=model,
+                        input=f"{base_prompt}\n\n{user}\nReturn a JSON object only.",
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": plan_schema,
+                        },
+                    )
+                except Exception:
+                    resp = await client.responses.create(
+                        model=model,
+                        input=f"{base_prompt}\n\n{user}\nReturn a JSON object only.",
+                    )
                 raw = getattr(resp, "output_text", None)
                 if not raw:
                     # Fallback traversal of SDK response
@@ -123,12 +163,54 @@ async def run_episode(
                         raw = "{}"
                 if not raw:
                     raw = "{}"
-                plan = extract_plan(raw, default_tool="browser.read")
-                tool = plan.get("tool", "browser.read")
-                args = plan.get("args", {})
-                res_raw = await call_mcp_tool(session, tool, args)
-                res = _normalize_result(res_raw)
-                transcript.append({"action": {"tool": tool, "args": args, "result": res}})
+                plan = extract_plan(raw, default_tool="vei.observe")
+                tool = str(plan.get("tool", "vei.observe"))
+                args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
+                if tool not in allowed_tools:
+                    # One-shot retry with schema hint
+                    try:
+                        resp2 = await client.responses.create(
+                            model=model,
+                            input=(f"{base_prompt}\n\n{user}\n"
+                                   "Return a strict JSON object with keys tool (enum) and args (object)."),
+                            response_format={
+                                "type": "json_schema",
+                                "json_schema": plan_schema,
+                            },
+                        )
+                        raw2 = getattr(resp2, "output_text", None) or "{}"
+                        plan = extract_plan(raw2, default_tool="vei.observe")
+                        tool = str(plan.get("tool", "vei.observe"))
+                        args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
+                    except Exception:
+                        tool, args = "vei.observe", {}
+                if tool == "vei.observe":
+                    res_raw = await call_mcp_tool(session, tool, args)
+                    res = _normalize_result(res_raw)
+                    transcript.append({"action": {"tool": tool, "args": args, "result": res}})
+                else:
+                    # Execute action and return post-action observation atomically
+                    try:
+                        ao_raw = await call_mcp_tool(session, "vei.act_and_observe", {"tool": tool, "args": args})
+                        ao = _normalize_result(ao_raw)
+                        res = ao.get("result", ao)
+                        obs2 = ao.get("observation")
+                    except Exception as e:
+                        res = {"error": str(e)}
+                        obs2 = None
+                    transcript.append({"action": {"tool": tool, "args": args, "result": res}})
+                    if isinstance(obs2, dict):
+                        transcript.append({"observation": obs2})
+
+                    # Auto-drain pending events after key actions to keep episodes bounded
+                    if tool in {"mail.compose", "slack.send_message"}:
+                        try:
+                            await call_mcp_tool(session, "vei.tick", {"dt_ms": 20000})
+                            obs_raw2 = await call_mcp_tool(session, "vei.observe", {})
+                            obs2b = _normalize_result(obs_raw2)
+                            transcript.append({"observation": obs2b})
+                        except Exception:
+                            ...
 
             return transcript
 
