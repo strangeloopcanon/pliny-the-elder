@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict
+import json
+import os
+import random
+from typing import Any, Dict, List, Optional
 
 from .scenario import Scenario
 
@@ -93,4 +96,82 @@ def get_scenario(name: str) -> Scenario:
 
 def list_scenarios() -> Dict[str, Scenario]:
     return dict(_CATALOG)
+
+
+def _rand_from_range(rng: random.Random, val: Any) -> Any:
+    if isinstance(val, list) and len(val) == 2:
+        lo, hi = val
+        if isinstance(lo, int) and isinstance(hi, int):
+            return rng.randint(lo, hi)
+        try:
+            return rng.uniform(float(lo), float(hi))
+        except Exception:
+            return val
+    return val
+
+
+def generate_scenario(template: Dict[str, Any], seed: Optional[int] = None) -> Scenario:
+    """Generate a Scenario from a parameter template.
+
+    The template may define:
+      - budget_cap_usd, derail_prob, slack_initial_message
+      - vendors: list of {name, price: [lo,hi], eta_days: [lo,hi]}
+      - browser_nodes
+      - derail_events: list of {dt_ms, target, payload}
+    Prices/ETAs are randomized within ranges using the given seed.
+    """
+
+    rng = random.Random(seed)
+    variants: List[str] = []
+    for v in template.get("vendors", []):
+        name = v.get("name", "Vendor")
+        price = _rand_from_range(rng, v.get("price"))
+        eta = _rand_from_range(rng, v.get("eta_days"))
+        variants.append(f"{name} quote: ${int(price)}, ETA: {int(eta)} days.")
+
+    return Scenario(
+        budget_cap_usd=template.get("budget_cap_usd"),
+        derail_prob=template.get("derail_prob"),
+        slack_initial_message=template.get("slack_initial_message"),
+        vendor_reply_variants=variants or None,
+        browser_nodes=template.get("browser_nodes"),
+        derail_events=template.get("derail_events"),
+    )
+
+
+def load_from_env(seed: Optional[int] = None) -> Scenario:
+    """Load a Scenario based on environment variables.
+
+    VEI_SCENARIO selects a named scenario from the catalog.
+    VEI_SCENARIO_CONFIG provides a JSON string or path to a JSON file
+    defining a parameter template for :func:`generate_scenario`.
+    VEI_SCENARIO_RANDOM=1 randomly chooses a catalog scenario when none
+    of the above are provided.
+    """
+
+    name = os.environ.get("VEI_SCENARIO")
+    if name:
+        try:
+            return get_scenario(name)
+        except KeyError:
+            pass
+
+    cfg = os.environ.get("VEI_SCENARIO_CONFIG")
+    if cfg:
+        try:
+            if os.path.exists(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    template = json.load(f)
+            else:
+                template = json.loads(cfg)
+            return generate_scenario(template, seed=seed)
+        except Exception:
+            return Scenario()
+
+    if os.environ.get("VEI_SCENARIO_RANDOM", "0") == "1":
+        rng = random.Random(seed)
+        key = rng.choice(list(_CATALOG.keys()))
+        return _CATALOG[key]
+
+    return Scenario()
 

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 from vei.world.scenario import Scenario
+from vei.world.scenarios import load_from_env
 
 
 def _safe_int(x: Any, default: int = 0) -> int:
@@ -482,10 +483,19 @@ class Router:
     def __init__(self, seed: int, artifacts_dir: Optional[str] = None, scenario: Optional[Scenario] = None):
         self.bus = EventBus(seed)
         self.trace = TraceLogger(artifacts_dir)
-        self.scenario = scenario or Scenario()
+        self.scenario = scenario or load_from_env(seed)
         self.slack = SlackSim(self.bus, self.scenario)
         self.mail = MailSim(self.bus, self.scenario)
         self.browser = BrowserVirtual(self.bus, self.scenario)
+        for evt in self.scenario.derail_events or []:
+            try:
+                dt = int(evt.get("dt_ms", 0))
+                target = evt.get("target")
+                payload = evt.get("payload", {})
+                if target:
+                    self.bus.schedule(dt_ms=dt, target=target, payload=payload)
+            except Exception:
+                continue
         # Optional ERP twin
         try:
             from .erp import ErpSim  # local import to avoid import-time failures

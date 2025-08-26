@@ -14,11 +14,13 @@ def compute_score(artifacts_dir: str | Path, success_mode: Literal["email", "ful
     calls: list[dict] = []
     slack_events: list[dict] = []
     mail_events: list[dict] = []
+    max_time_ms = 0
 
     for raw in trace_path.read_text(encoding="utf-8").splitlines():
         if not raw.strip():
             continue
         rec = json.loads(raw)
+        max_time_ms = max(max_time_ms, int(rec.get("time_ms", 0)))
         if rec.get("type") == "call":
             calls.append(rec)
         elif rec.get("type") == "event":
@@ -58,7 +60,7 @@ def compute_score(artifacts_dir: str | Path, success_mode: Literal["email", "ful
     return {
         "success": success,
         "subgoals": subgoals,
-        "costs": {"actions": len(calls)},
+        "costs": {"actions": len(calls), "time_ms": max_time_ms},
         "provenance_ok": True,
         "success_email_only": success_email,
         "success_full_flow": success_full,

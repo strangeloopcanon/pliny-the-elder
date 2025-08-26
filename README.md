@@ -92,6 +92,22 @@ vei-demo --mode llm --transport stdio --model gpt-5 --artifacts-dir ./_vei_out/d
 
  
 
+### Train a simple policy
+Run a minimal random-policy loop with the Gym-like environment:
+
+```bash
+python examples/rl_train.py --episodes 5 --max-steps 20 --out-dir ./_vei_out/rl_run
+```
+
+The evaluation episode writes a trace to the directory above. Score the run:
+
+```bash
+python - <<'PY'
+from vei.score_core import compute_score
+print(compute_score('_vei_out/rl_run'))
+PY
+```
+
 ### Testing
 Prefer invoking pytest via the active interpreter to avoid host shims:
 ```bash

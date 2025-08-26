@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -16,4 +16,7 @@ class Scenario:
 
     # Browser configuration
     browser_nodes: Optional[Dict[str, dict]] = None
+
+    # Optional pre-scheduled events (e.g., derailments)
+    derail_events: Optional[List[Dict[str, Any]]] = None
 

@@ -47,6 +47,10 @@ class VEIEnv:  # Gymnasium-compatible but avoids hard dependency at import time
         self._saw_approval = False
         self._email_parsed = False
 
+        # Book-keeping for cost shaping
+        self.steps = 0
+        self.elapsed_ms = 0
+
     # Gymnasium signature: reset(self, *, seed=None, options=None)
     def reset(self, *, seed: int | None = None, options: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         if seed is not None:
@@ -56,6 +60,8 @@ class VEIEnv:  # Gymnasium-compatible but avoids hard dependency at import time
         self._sent_email = False
         self._saw_approval = False
         self._email_parsed = False
+        self.steps = 0
+        self.elapsed_ms = 0
         obs = self.router.observe().model_dump()
         return obs, {}
 
@@ -70,6 +76,10 @@ class VEIEnv:  # Gymnasium-compatible but avoids hard dependency at import time
         self._update_subgoals_from_last(tool)
         self._update_subgoals_from_trace()
 
+        # Track cumulative cost stats
+        self.steps += 1
+        self.elapsed_ms = self.router.bus.clock_ms
+
         reward = self._compute_reward()
         terminated = self._email_parsed  # episode ends when main goal achieved
         # Also terminate if no pending events and we've already sent email + approval processed
@@ -79,24 +89,31 @@ class VEIEnv:  # Gymnasium-compatible but avoids hard dependency at import time
             terminated = terminated or True
 
         truncated = False
-        info = {"subgoals": {
-            "citations": int(self._saw_browser_read),
-            "approval": int(self._saw_approval),
-            "email_sent": int(self._sent_email),
-            "email_parsed": int(self._email_parsed),
-        }}
+        info = {
+            "subgoals": {
+                "citations": int(self._saw_browser_read),
+                "approval": int(self._saw_approval),
+                "email_sent": int(self._sent_email),
+                "email_parsed": int(self._email_parsed),
+            },
+            "costs": {"actions": self.steps, "time_ms": self.elapsed_ms},
+        }
         return obs, float(reward), bool(terminated), bool(truncated), info
 
     def _compute_reward(self) -> float:
         if self.reward_mode == "dense":
-            return 0.25 * (
+            base = 0.25 * (
                 int(self._saw_browser_read)
                 + int(self._saw_approval)
                 + int(self._sent_email)
                 + int(self._email_parsed)
             )
-        # sparse
-        return 1.0 if self._email_parsed else 0.0
+        else:
+            base = 1.0 if self._email_parsed else 0.0
+
+        # Small penalty proportional to cumulative actions and time
+        penalty = 0.01 * self.steps + 1e-5 * self.elapsed_ms
+        return base - penalty
 
     def _update_subgoals_from_last(self, tool: str) -> None:
         if tool == "browser.read":
