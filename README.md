@@ -228,6 +228,49 @@ Notes on model behavior and failure modes
 Troubleshooting
 - If scoring shows zero actions, inspect the transcript to confirm whether the model only issued `vei.observe` (a no‑op). Re‑run or increase `--max-steps`.
 - If using a custom gateway, add `--openai-base-url default` to force the OpenAI Responses endpoint.
+
+## Expose MCP Environment
+
+- Stdio (recommended): Local, deterministic, no network server needed.
+  - Server: `python -m vei.router`
+  - Used by `vei-llm-test`, `vei-demo`, and `vei-chat` by default.
+  - Discovery: `mcp.list_tools` includes `vei.*`, and `vei.help` returns the tool catalog + examples.
+- SSE (optional, HTTP/SSE): Useful for remote access or non‑Python clients.
+  - Server: `VEI_HOST=0.0.0.0 VEI_PORT=3001 VEI_SEED=42042 python -m vei.router.sse`
+  - Client: pass `--transport sse` to the CLIs or use an MCP SSE client and the `VEI_SSE_URL`.
+
+## Use Other LLMs
+
+There are two simple paths:
+
+1) OpenAI‑compatible gateway (Responses API)
+
+- Requirements: your gateway must expose OpenAI’s Responses API at `/v1/responses`.
+- Configure:
+  - `OPENAI_BASE_URL=https://your-gateway/v1`
+  - `OPENAI_API_KEY=...`
+- Run with any model id your gateway supports:
+```bash
+VEI_ARTIFACTS_DIR=_vei_out/llmtest \
+vei-llm-test --model your-model --max-steps 32 --transport stdio
+```
+- Notes: the planner first requests `response_format={type: json_schema}`; if unsupported, it retries without it and still expects a JSON object `{"tool":..., "args":{}}`.
+
+2) Bring‑your‑own planner (Anthropic or any SDK)
+
+- Keep VEI as a pure MCP server and drive it with your own loop:
+  1. Start stdio server: `python -m vei.router` (or use SSE).
+  2. Connect via MCP client and call `session.initialize()`.
+  3. Loop:
+     - Call `vei.observe {}` to get `{time_ms, focus, action_menu, pending_events}`.
+     - Ask your LLM to return a strict JSON plan: `{"tool":"...","args":{...}}`.
+     - If `tool == "vei.observe"`, call it directly; otherwise call `vei.act_and_observe {tool,args}` to execute and get a post‑action observation in one step.
+     - After `mail.compose` or `slack.send_message`, call `vei.tick {dt_ms:20000}` and then `vei.observe {}` to deliver vendor replies.
+     - Repeat for N steps; write a transcript and set `VEI_ARTIFACTS_DIR` to capture `trace.jsonl`.
+- Discover tools: call `mcp.list_tools` and `vei.help` (lists `vei.*`, `slack.*`, `mail.*`, `browser.*` and examples).
+- Score the run: `vei-score --artifacts-dir _vei_out/<run_dir> --success-mode full`.
+
+Tip: To hard‑swap the built‑in CLIs to your SDK, replace the OpenAI client calls in `vei/cli/vei_llm_test.py` (and `vei/cli/vei_demo.py`) with your provider’s SDK while preserving the `{tool,args}` output shape.
 - MCP transport for dev/CI is stdio-only (no SSE required).
 
 Sample vei-llm-test transcript (gpt-5-mini, 6 steps)
