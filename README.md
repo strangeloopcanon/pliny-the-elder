@@ -1,6 +1,7 @@
 ## VEI (Virtual Enterprise Internet)
 
 ![VEI Virtual Office](docs/assets/virtual_office.gif)
+<p align="center"><sub>Conceptual office view</sub></p>
 
 Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server exposes tools and a seeded event bus so agents can practice multi-app workflows deterministically and reproducibly.
 
