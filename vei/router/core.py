@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 import heapq
 import threading
 import queue
@@ -12,6 +13,12 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from vei.world.scenario import Scenario
 from vei.world.scenarios import load_from_env
+from vei.monitors.manager import MonitorManager
+from vei.monitors.models import MonitorFinding
+from vei.policy import DEFAULT_RULES, PolicyEngine, PromoteMonitorRule
+from vei.world.drift import DriftEngine
+from vei.world.state import Event as StateEvent, StateStore
+from .tool_registry import ToolRegistry, ToolSpec
 
 
 def _safe_int(x: Any, default: int = 0) -> int:
@@ -181,6 +188,75 @@ class TraceLogger:
             for entry in self.entries[self._flush_idx : ]:
                 f.write(json.dumps(entry, separators=(",", ":")) + "\n")
         self._flush_idx = len(self.entries)
+
+
+def _reduce_router_init(state: Dict[str, Any], event: StateEvent) -> None:
+    meta = state.setdefault("meta", {})
+    meta.update(
+        {
+            "seed": event.payload.get("seed"),
+            "scenario": event.payload.get("scenario"),
+            "branch": event.payload.get("branch"),
+        }
+    )
+
+
+def _reduce_tool_call(state: Dict[str, Any], event: StateEvent) -> None:
+    calls = state.setdefault("tool_calls", [])
+    calls.append(
+        {
+            "index": event.index,
+            "tool": event.payload.get("tool"),
+            "time_ms": event.payload.get("time_ms"),
+        }
+    )
+    if len(calls) > 200:
+        del calls[: len(calls) - 200]
+
+
+def _reduce_event_delivery(state: Dict[str, Any], event: StateEvent) -> None:
+    deliveries = state.setdefault("deliveries", {})
+    target = str(event.payload.get("target"))
+    deliveries[target] = deliveries.get(target, 0) + 1
+
+
+def _reduce_drift_schedule(state: Dict[str, Any], event: StateEvent) -> None:
+    drift_state = state.setdefault("drift", {})
+    scheduled = drift_state.setdefault("scheduled", [])
+    scheduled.append(
+        {
+            "job": event.payload.get("job"),
+            "target": event.payload.get("target"),
+            "dt_ms": event.payload.get("dt_ms"),
+        }
+    )
+    if len(scheduled) > 100:
+        del scheduled[: len(scheduled) - 100]
+
+
+def _reduce_drift_delivered(state: Dict[str, Any], event: StateEvent) -> None:
+    drift_state = state.setdefault("drift", {})
+    delivered = drift_state.setdefault("delivered", {})
+    job = event.payload.get("job")
+    if job is None:
+        return
+    delivered[job] = delivered.get(job, 0) + 1
+
+
+def _reduce_monitor_finding(state: Dict[str, Any], event: StateEvent) -> None:
+    monitor_state = state.setdefault("monitors", {})
+    findings = monitor_state.setdefault("findings", [])
+    findings.append(event.payload)
+    if len(findings) > 100:
+        del findings[: len(findings) - 100]
+
+
+def _reduce_policy_finding(state: Dict[str, Any], event: StateEvent) -> None:
+    policy_state = state.setdefault("policy", {})
+    findings = policy_state.setdefault("findings", [])
+    findings.append(event.payload)
+    if len(findings) > 200:
+        del findings[: len(findings) - 200]
 
 
 class SlackSim:
@@ -482,6 +558,44 @@ class BrowserVirtual:
 class Router:
     def __init__(self, seed: int, artifacts_dir: Optional[str] = None, scenario: Optional[Scenario] = None):
         self.bus = EventBus(seed)
+
+        state_dir_env = os.environ.get("VEI_STATE_DIR")
+        base_dir = Path(state_dir_env).expanduser() if state_dir_env else None
+        self.state_store = StateStore(base_dir=base_dir)
+        self.state_store.register_reducer("router.init", _reduce_router_init)
+        self.state_store.register_reducer("tool.call", _reduce_tool_call)
+        self.state_store.register_reducer("event.delivery", _reduce_event_delivery)
+        self.state_store.register_reducer("drift.schedule", _reduce_drift_schedule)
+        self.state_store.register_reducer("drift.delivered", _reduce_drift_delivered)
+        self.state_store.register_reducer("monitor.finding", _reduce_monitor_finding)
+        self.state_store.register_reducer("policy.finding", _reduce_policy_finding)
+        self._snapshot_interval = 25 if base_dir else None
+        self._receipts: List[Dict[str, Any]] = []
+        self._receipts_path: Optional[Path] = None
+        if self.state_store.storage_dir:
+            self._receipts_path = self.state_store.storage_dir / "receipts.jsonl"
+            self._load_receipts()
+
+        self.registry = ToolRegistry()
+        self._seed_tool_registry()
+        monitors_env = os.environ.get("VEI_MONITORS", "").strip()
+        monitor_names = [m.strip() for m in (monitors_env.split(",") if monitors_env else []) if m.strip()]
+        self.monitor_manager = MonitorManager(self.registry, monitor_names)
+        rules = list(DEFAULT_RULES)
+        policy_promote_env = os.environ.get("VEI_POLICY_PROMOTE", "").strip()
+        if policy_promote_env:
+            for item in policy_promote_env.split(","):
+                token = item.strip()
+                if not token:
+                    continue
+                if ":" in token:
+                    code, severity = token.split(":", 1)
+                    rules.append(PromoteMonitorRule(code.strip(), severity=severity.strip() or "warning"))
+                else:
+                    rules.append(PromoteMonitorRule(token, severity="warning"))
+        self.policy_engine = PolicyEngine(rules)
+        self._policy_findings: List[Dict[str, Any]] = []
+
         self.trace = TraceLogger(artifacts_dir)
         self.scenario = scenario or load_from_env(seed)
         self.slack = SlackSim(self.bus, self.scenario)
@@ -509,6 +623,356 @@ class Router:
         except Exception:
             self.crm = None  # type: ignore[attr-defined]
 
+        drift_seed_env = os.environ.get("VEI_DRIFT_SEED")
+        try:
+            drift_seed = int(drift_seed_env) if drift_seed_env is not None else (seed ^ 0xD1F7)
+        except ValueError:
+            drift_seed = seed ^ 0xD1F7
+        drift_mode = os.environ.get("VEI_DRIFT_MODE") or os.environ.get("VEI_DRIFT_RATE") or "off"
+        self.drift = DriftEngine(state_store=self.state_store, bus=self.bus, seed=drift_seed, mode=drift_mode)
+        self.drift.prime()
+
+        existing_policy = self.state_store.materialised_state().get("policy", {})
+        if isinstance(existing_policy, dict):
+            findings = existing_policy.get("findings", [])
+            if isinstance(findings, list):
+                self._policy_findings.extend(findings)
+
+        self._record_router_init(seed)
+
+    @staticmethod
+    def _jsonable(value: Any) -> Any:
+        try:
+            json.dumps(value)
+            return value
+        except TypeError:
+            if isinstance(value, dict):
+                return {k: Router._jsonable(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [Router._jsonable(v) for v in value]
+            if isinstance(value, tuple):
+                return [Router._jsonable(v) for v in value]
+            if isinstance(value, set):
+                return [Router._jsonable(v) for v in sorted(value)]
+            return repr(value)
+
+    def _append_state(
+        self,
+        kind: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        clock_ms: Optional[int] = None,
+    ) -> Optional[StateEvent]:
+        payload_map = {k: Router._jsonable(v) for k, v in dict(payload or {}).items()}
+        event = self.state_store.append(kind, payload_map, clock_ms=clock_ms or self.bus.clock_ms)
+        if self._snapshot_interval and event.index % self._snapshot_interval == 0:
+            self.state_store.take_snapshot()
+        return event
+
+    def _record_router_init(self, seed: int) -> None:
+        scenario_name = getattr(self.scenario, "name", None)
+        payload = {"seed": seed, "scenario": scenario_name, "branch": self.state_store.branch}
+        self._append_state("router.init", payload)
+        if self._snapshot_interval:
+            self.state_store.take_snapshot()
+
+    def _record_tool_call(self, tool: str, args: Dict[str, Any], result: Any) -> None:
+        payload = {
+            "tool": tool,
+            "args": {k: Router._jsonable(v) for k, v in dict(args or {}).items()},
+            "time_ms": self.bus.clock_ms,
+        }
+        event = self._append_state("tool.call", payload)
+        receipt = {
+            "tool": tool,
+            "time_ms": self.bus.clock_ms,
+            "state_head": self.state_store.head,
+            "event_index": event.index if event else None,
+        }
+        try:
+            receipt["result_preview"] = Router._jsonable(result)
+        except Exception:
+            receipt["result_preview"] = repr(result)
+        self._receipts.append(receipt)
+        if len(self._receipts) > 50:
+            self._receipts.pop(0)
+        self._write_receipt(receipt)
+
+        findings: List[Any] = []
+        if self.monitor_manager.monitors():
+            snapshot = self.state_snapshot(include_state=False, tool_tail=0, include_receipts=False)
+            findings = self.monitor_manager.after_tool_call(
+                tool=tool,
+                args=args,
+                result=result,
+                snapshot=snapshot,
+            )
+            for finding in findings:
+                payload = {
+                    "monitor": finding.monitor,
+                    "code": finding.code,
+                    "message": finding.message,
+                    "severity": finding.severity,
+                    "time_ms": finding.time_ms,
+                    "tool": finding.tool,
+                    "metadata": Router._jsonable(finding.metadata),
+                }
+                self._append_state("monitor.finding", payload)
+        if findings:
+            policy_findings = self.policy_engine.evaluate(findings)
+            for pf in policy_findings:
+                payload = {
+                    "code": pf.code,
+                    "message": pf.message,
+                    "severity": pf.severity,
+                    "time_ms": pf.time_ms,
+                    "tool": pf.tool,
+                    "metadata": Router._jsonable(pf.metadata),
+                }
+                self._policy_findings.append(payload)
+                self._append_state("policy.finding", payload)
+        if len(self._policy_findings) > 200:
+            self._policy_findings = self._policy_findings[-200:]
+
+    def _record_event_delivery(self, target: str, payload: Dict[str, Any]) -> None:
+        st_payload = {
+            "target": target,
+            "payload": Router._jsonable(payload),
+            "time_ms": self.bus.clock_ms,
+        }
+        self._append_state("event.delivery", st_payload)
+        if getattr(self, "drift", None) is not None:
+            try:
+                self.drift.handle_delivery(target, payload)
+            except Exception:
+                # Drift is best-effort; never break the main loop.
+                pass
+
+    def _load_receipts(self) -> None:
+        if not self._receipts_path or not self._receipts_path.exists():
+            return
+        try:
+            with self._receipts_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    self._receipts.append(data)
+        except Exception:
+            self._receipts = []
+
+    def _write_receipt(self, receipt: Dict[str, Any]) -> None:
+        if not self._receipts_path:
+            return
+        try:
+            with self._receipts_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(receipt, sort_keys=True) + "\n")
+        except Exception:
+            pass
+
+    def state_snapshot(
+        self,
+        *,
+        include_state: bool = False,
+        tool_tail: int = 20,
+        include_receipts: bool = True,
+    ) -> Dict[str, Any]:
+        state = self.state_store.materialised_state()
+        tool_calls: List[Dict[str, Any]] = list(state.get("tool_calls", []))
+        tail = tool_calls[-tool_tail:] if tool_tail and tool_tail > 0 else tool_calls
+        deliveries = dict(state.get("deliveries", {}))
+        drift_state = state.get("drift", {})
+        drift_summary = {
+            "scheduled_count": len(drift_state.get("scheduled", [])),
+            "delivered": dict(drift_state.get("delivered", {})),
+        }
+        snapshot: Dict[str, Any] = {
+            "head": self.state_store.head,
+            "branch": self.state_store.branch,
+            "time_ms": self.bus.clock_ms,
+            "meta": dict(state.get("meta", {})),
+            "tool_tail": tail,
+            "deliveries": deliveries,
+            "drift": drift_summary,
+        }
+        monitor_tail = [asdict(f) for f in self.monitor_manager.findings_tail(tool_tail or 20)]
+        snapshot["monitor_findings"] = monitor_tail
+        policy_tail: List[Dict[str, Any]] = []
+        for item in self._policy_findings[-(tool_tail or 20):]:
+            policy_tail.append(
+                {
+                    "code": item.get("code"),
+                    "message": item.get("message"),
+                    "severity": item.get("severity"),
+                    "time_ms": item.get("time_ms"),
+                    "tool": item.get("tool"),
+                    "metadata": item.get("metadata", {}),
+                }
+            )
+        snapshot["policy_findings"] = policy_tail
+        if include_receipts:
+            snapshot["receipts"] = list(self._receipts[-tool_tail:]) if tool_tail else list(self._receipts)
+        if include_state:
+            snapshot["state"] = state
+        return snapshot
+
+    def _seed_tool_registry(self) -> None:
+        specs = [
+            ToolSpec(
+                name="vei.observe",
+                description="Obtain the current observation (advances time).",
+                side_effects=("time_advance",),
+                default_latency_ms=1000,
+            ),
+            ToolSpec(
+                name="vei.tick",
+                description="Advance logical time and deliver due events.",
+                side_effects=("time_advance", "event_delivery"),
+            ),
+            ToolSpec(
+                name="vei.act_and_observe",
+                description="Execute a tool then fetch the next observation.",
+                side_effects=("time_advance",),
+            ),
+            ToolSpec(
+                name="vei.state",
+                description="Inspect state head, receipts, and recent tool calls.",
+                side_effects=(),
+            ),
+            ToolSpec(
+                name="slack.send_message",
+                description="Post a message into a Slack channel thread.",
+                side_effects=("slack_outbound",),
+                permissions=("slack:write",),
+                default_latency_ms=500,
+            ),
+            ToolSpec(
+                name="slack.open_channel",
+                description="Open a Slack channel view.",
+                side_effects=(),
+                permissions=("slack:read",),
+            ),
+            ToolSpec(
+                name="slack.fetch_thread",
+                description="Fetch a Slack thread for review.",
+                side_effects=(),
+                permissions=("slack:read",),
+            ),
+            ToolSpec(
+                name="slack.list_channels",
+                description="List available Slack channels.",
+                permissions=("slack:read",),
+            ),
+            ToolSpec(
+                name="slack.react",
+                description="Add a reaction to a Slack message.",
+                side_effects=("slack_outbound",),
+                permissions=("slack:write",),
+            ),
+            ToolSpec(
+                name="mail.compose",
+                description="Send an email to a recipient.",
+                side_effects=("mail_outbound", "event_schedule"),
+                permissions=("mail:write",),
+                default_latency_ms=800,
+            ),
+            ToolSpec(
+                name="mail.list",
+                description="List newest messages in the inbox.",
+                permissions=("mail:read",),
+            ),
+            ToolSpec(
+                name="mail.open",
+                description="Open a specific email body.",
+                permissions=("mail:read",),
+            ),
+            ToolSpec(
+                name="mail.reply",
+                description="Reply to an existing email thread.",
+                side_effects=("mail_outbound", "event_schedule"),
+                permissions=("mail:write",),
+                default_latency_ms=800,
+            ),
+            ToolSpec(
+                name="browser.read",
+                description="Read current browser node.",
+                permissions=("browser:read",),
+            ),
+            ToolSpec(
+                name="browser.click",
+                description="Click a UI element and navigate.",
+                side_effects=("browser_navigation",),
+                permissions=("browser:write",),
+            ),
+            ToolSpec(
+                name="browser.find",
+                description="Search current document for affordances.",
+                permissions=("browser:read",),
+            ),
+            ToolSpec(
+                name="browser.open",
+                description="Open a URL inside the virtual browser.",
+                side_effects=("browser_navigation",),
+                permissions=("browser:write",),
+            ),
+            ToolSpec(
+                name="browser.back",
+                description="Navigate back to the previous page.",
+                side_effects=("browser_navigation",),
+                permissions=("browser:write",),
+            ),
+            ToolSpec(
+                name="browser.type",
+                description="Type text into a field.",
+                side_effects=("browser_input",),
+                permissions=("browser:write",),
+            ),
+            ToolSpec(
+                name="browser.submit",
+                description="Submit a form.",
+                side_effects=("browser_navigation",),
+                permissions=("browser:write",),
+            ),
+        ]
+        # ERP and CRM specs are registered lazily to avoid importing optional twins here.
+        erp_specs = [
+            ToolSpec(name="erp.create_po", description="Create a purchase order.", permissions=("erp:write",)),
+            ToolSpec(name="erp.get_po", description="Retrieve a purchase order.", permissions=("erp:read",)),
+            ToolSpec(name="erp.list_pos", description="List purchase orders.", permissions=("erp:read",)),
+            ToolSpec(name="erp.receive_goods", description="Record goods receipt.", permissions=("erp:write",)),
+            ToolSpec(name="erp.submit_invoice", description="Submit a vendor invoice.", permissions=("erp:write",)),
+            ToolSpec(name="erp.get_invoice", description="Retrieve invoice detail.", permissions=("erp:read",)),
+            ToolSpec(name="erp.list_invoices", description="List invoices.", permissions=("erp:read",)),
+            ToolSpec(name="erp.match_three_way", description="Run three-way match.", permissions=("erp:write",)),
+            ToolSpec(name="erp.post_payment", description="Post a payment.", permissions=("erp:write",)),
+        ]
+        crm_specs = [
+            ToolSpec(name="crm.create_contact", description="Create a CRM contact.", permissions=("crm:write",)),
+            ToolSpec(name="crm.get_contact", description="Fetch CRM contact details.", permissions=("crm:read",)),
+            ToolSpec(name="crm.list_contacts", description="List contacts.", permissions=("crm:read",)),
+            ToolSpec(name="crm.create_company", description="Create a company record.", permissions=("crm:write",)),
+            ToolSpec(name="crm.get_company", description="Fetch company details.", permissions=("crm:read",)),
+            ToolSpec(name="crm.list_companies", description="List company records.", permissions=("crm:read",)),
+            ToolSpec(name="crm.associate_contact_company", description="Link contact to company.", permissions=("crm:write",)),
+            ToolSpec(name="crm.create_deal", description="Create a deal/opportunity.", permissions=("crm:write",)),
+            ToolSpec(name="crm.get_deal", description="Fetch deal details.", permissions=("crm:read",)),
+            ToolSpec(name="crm.list_deals", description="List deals.", permissions=("crm:read",)),
+            ToolSpec(name="crm.update_deal_stage", description="Update deal stage.", permissions=("crm:write",)),
+            ToolSpec(name="crm.log_activity", description="Log an activity.", permissions=("crm:write",)),
+        ]
+        specs.extend(erp_specs)
+        specs.extend(crm_specs)
+        for spec in specs:
+            try:
+                self.registry.register(spec)
+            except ValueError:
+                # Allow duplicate registration attempts when multiple routers spin up in tests.
+                continue
+
+    def last_receipt(self) -> Optional[Dict[str, Any]]:
+        return self._receipts[-1] if self._receipts else None
+
     def call_and_step(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool call, deliver any due event, advance time, and persist trace.
 
@@ -516,6 +980,7 @@ class Router:
         so downstream scoring can consume trace.jsonl during tests.
         """
         result = self._execute(tool, args)
+        self._record_tool_call(tool, args, result)
         self.trace.record_call(tool, args, result, time_ms=self.bus.clock_ms)
         evt = self.bus.next_if_due()
         if evt:
@@ -524,7 +989,10 @@ class Router:
                 emitted = self.slack.deliver(evt.payload)
             elif evt.target == "mail":
                 emitted = self.mail.deliver(evt.payload)
+            if emitted is None:
+                emitted = {}
             self.trace.record_event(evt.target, evt.payload, emitted, time_ms=self.bus.clock_ms)
+            self._record_event_delivery(evt.target, evt.payload)
         self.bus.advance(1000)
         # Persist after each step when artifacts directory is configured
         self.trace.flush()
@@ -706,7 +1174,10 @@ class Router:
                 elif evt.target == "mail":
                     emitted = self.mail.deliver(evt.payload)
                 delivered[evt.target] += 1
+                if emitted is None:
+                    emitted = {}
                 self.trace.record_event(evt.target, evt.payload, emitted, time_ms=self.bus.clock_ms)
+                self._record_event_delivery(evt.target, evt.payload)
         # Advance remaining time to target_time
         self.bus.clock_ms = target_time
         self.trace.flush()
@@ -727,7 +1198,10 @@ class Router:
                 emitted = self.slack.deliver(evt.payload)
             elif evt.target == "mail":
                 emitted = self.mail.deliver(evt.payload)
+            if emitted is None:
+                emitted = {}
             self.trace.record_event(evt.target, evt.payload, emitted, time_ms=self.bus.clock_ms)
+            self._record_event_delivery(evt.target, evt.payload)
         # Advance time per observation to make future events become due
         self.bus.advance(1000)
         focus = focus_hint or "browser"

@@ -52,11 +52,9 @@ app = typer.Typer(add_completion=False)
 
 
 SYSTEM_PROMPT = (
-    "You are an assistant controlling tools via MCP in a synthetic enterprise world. "
-    "Each step: first call 'vei.observe' to see the action_menu, then pick exactly one tool to call. "
-    "You may call any of: vei.* (observe,tick), browser.*, slack.*, mail.* as needed to accomplish the task. "
-    "Goal: research the product page, send a Slack approval summary to #procurement, compose a vendor email, and wait for the reply. "
-    "Reply with JSON only. Keep steps minimal."
+    "You are an MCP agent interacting with the VEI environment. "
+    "Call 'vei.observe {}' whenever you need to inspect the current state—it is often a starting point. "
+    "Always reply with a single JSON object of the form {\"tool\": string, \"args\": object}."
 )
 
 
@@ -87,59 +85,46 @@ async def run_episode(
                 base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
                 api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
             )
-            # Enumerate allowed tools for schema enforcement
-            allowed_tools = [
-                "vei.observe",
-                "vei.tick",
-                "vei.help",
-                "browser.read",
-                "browser.find",
-                "browser.open",
-                "browser.click",
-                "browser.back",
-                "slack.send_message",
-                "mail.compose",
-                "mail.list",
-                "mail.open",
-                "mail.reply",
-            ]
-            plan_schema = {
-                "name": "vei.plan.schema",
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["tool", "args"],
-                    "properties": {
-                        "tool": {"type": "string", "enum": allowed_tools},
-                        "args": {"type": "object"},
-                    },
-                },
-            }
             base_prompt = SYSTEM_PROMPT
             if task:
                 base_prompt += f"\nTask: {task}"
             transcript: list[dict] = []
+            history: list[str] = []
 
             for step in range(max_steps):
                 obs_raw = await call_mcp_tool(session, "vei.observe", {})
                 obs = _normalize_result(obs_raw)
                 transcript.append({"observation": obs})
+                history.append(f"observation {step}: {json.dumps(obs)}")
                 menu = obs.get("action_menu", [])
-                menu_text = "\n".join(
-                    f"- {m.get('tool')} {json.dumps(m.get('args', m.get('args_schema', {})))}" for m in menu
-                )
-                user = (
-                    f"Time: {obs.get('time_ms')}\nFocus: {obs.get('focus')}\nSummary: {obs.get('summary')}\n"
-                    f"Pending: {json.dumps(obs.get('pending_events'))}\n"
-                    f"Action menu (choose ONE tool and JSON args):\n{menu_text}\n"
-                    "Reply STRICTLY as JSON with fields {\"tool\": str, \"args\": object}."
-                )
+                menu_tools = {"vei.observe", "vei.tick"}
+                for item in menu:
+                    tool_name = item.get("tool")
+                    if tool_name:
+                        menu_tools.add(str(tool_name))
+                # Dynamic JSON schema based on observed affordances
+                plan_schema = {
+                    "name": "vei.plan.schema",
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["tool", "args"],
+                        "properties": {
+                            "tool": {"type": "string", "enum": sorted(menu_tools)},
+                            "args": {"type": "object"},
+                        },
+                    },
+                }
+                context_block = "\n".join(history[-6:])
+                user = f"Observation:\n{json.dumps(obs)}"
+                if context_block:
+                    user = f"Context:\n{context_block}\n\n{user}"
                 # Responses API call; enforce JSON object output
                 # Try with a JSON schema; fall back if unsupported
                 try:
                     resp = await client.responses.create(
                         model=model,
-                        input=f"{base_prompt}\n\n{user}\nReturn a JSON object only.",
+                        input=f"{base_prompt}\n\n{user}",
                         response_format={
                             "type": "json_schema",
                             "json_schema": plan_schema,
@@ -148,7 +133,7 @@ async def run_episode(
                 except Exception:
                     resp = await client.responses.create(
                         model=model,
-                        input=f"{base_prompt}\n\n{user}\nReturn a JSON object only.",
+                        input=f"{base_prompt}\n\n{user}",
                     )
                 raw = getattr(resp, "output_text", None)
                 if not raw:
@@ -166,13 +151,12 @@ async def run_episode(
                 plan = extract_plan(raw, default_tool="vei.observe")
                 tool = str(plan.get("tool", "vei.observe"))
                 args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
-                if tool not in allowed_tools:
+                if tool not in menu_tools:
                     # One-shot retry with schema hint
                     try:
                         resp2 = await client.responses.create(
                             model=model,
-                            input=(f"{base_prompt}\n\n{user}\n"
-                                   "Return a strict JSON object with keys tool (enum) and args (object)."),
+                            input=f"{base_prompt}\n\n{user}",
                             response_format={
                                 "type": "json_schema",
                                 "json_schema": plan_schema,
@@ -184,10 +168,13 @@ async def run_episode(
                         args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
                     except Exception:
                         tool, args = "vei.observe", {}
+                action_record = {"tool": tool, "args": args}
                 if tool == "vei.observe":
                     res_raw = await call_mcp_tool(session, tool, args)
                     res = _normalize_result(res_raw)
-                    transcript.append({"action": {"tool": tool, "args": args, "result": res}})
+                    action_record["result"] = res
+                    transcript.append({"action": action_record})
+                    history.append(f"action {step}: {json.dumps(action_record)}")
                 else:
                     # Execute action and return post-action observation atomically
                     try:
@@ -198,9 +185,12 @@ async def run_episode(
                     except Exception as e:
                         res = {"error": str(e)}
                         obs2 = None
-                    transcript.append({"action": {"tool": tool, "args": args, "result": res}})
+                    action_record["result"] = res
+                    transcript.append({"action": action_record})
+                    history.append(f"action {step}: {json.dumps(action_record)}")
                     if isinstance(obs2, dict):
                         transcript.append({"observation": obs2})
+                        history.append(f"observation {step}.1: {json.dumps(obs2)}")
 
                     # Auto-drain pending events after key actions to keep episodes bounded
                     if tool in {"mail.compose", "slack.send_message"}:
@@ -209,6 +199,7 @@ async def run_episode(
                             obs_raw2 = await call_mcp_tool(session, "vei.observe", {})
                             obs2b = _normalize_result(obs_raw2)
                             transcript.append({"observation": obs2b})
+                            history.append(f"observation {step}.tick: {json.dumps(obs2b)}")
                         except Exception:
                             ...
 
@@ -252,8 +243,8 @@ def run(
     task: str | None = typer.Option(None, help="High-level goal for the LLM (prefixed as 'Task: ...')"),
 ) -> None:
     load_dotenv(override=True)
-    if not os.getenv("OPENAI_API_KEY"):
-        raise typer.BadParameter("OPENAI_API_KEY not set (put it in .env)")
+    if not (openai_api_key or os.getenv("OPENAI_API_KEY")):
+        raise typer.BadParameter("OPENAI_API_KEY not set (provide --openai-api-key or put it in .env)")
     transcript = asyncio.run(
         run_episode(
             model=model,

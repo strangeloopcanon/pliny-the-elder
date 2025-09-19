@@ -30,6 +30,7 @@ Available tools (MCP names)
 - vei.pending {} -> { slack: int, mail: int, total: int }
 - vei.tick { dt_ms?: int } -> { delivered: { slack, mail }, time_ms, pending }
 - vei.act_and_observe { tool: string, args: object } -> { result, observation }
+- vei.state { include_state?: bool, tool_tail?: int, include_receipts?: bool } -> { head, branch, time_ms, tool_tail: [...], receipts: [...], ... }
 - browser.* (open, find, click, type, submit, read, back)
 - slack.* (list_channels, open_channel, send_message, react, fetch_thread)
 - mail.* (list, open, compose, reply)

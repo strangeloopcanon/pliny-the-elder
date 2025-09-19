@@ -55,6 +55,7 @@ OPENAI_API_KEY=sk-your-actual-api-key-here
 VEI_SSE_URL=http://127.0.0.1:3001/sse
 VEI_SEED=42042
 VEI_ARTIFACTS_DIR=./_vei_out
+VEI_MONITORS=tool_aware  # Enable heuristic monitor findings in state snapshots
 ```
 
 ### Verify setup
@@ -188,12 +189,14 @@ vei-score-crm --artifacts-dir ./_vei_out/run_2025_08_17
 - Call `vei.observe` to get `{time_ms, focus, summary, action_menu, pending_events}`.
 - Choose one tool from `action_menu` (or any allowed tool) and call it.
 - Repeat; optionally `vei.reset` to restart the episode.
+- Inspect state receipts with `vei.state {"tool_tail": 10}` when you need to debug agent behaviour or replay runs.
 
 Examples (MCP):
 - `vei.act_and_observe {"tool":"browser.read","args":{}}`
 - `vei.tick {"dt_ms":15000}`
 - `slack.send_message {"channel":"#procurement","text":"Posting summary for approval"}`
 - `mail.compose {"to":"sales@macrocompute.example","subj":"Quote request","body_text":"Please send latest price and ETA."}`
+- `vei.state {"tool_tail":5}`
 
  
 
@@ -219,6 +222,19 @@ VEI_SEED=42042 vei-llm-test \
 
 vei-score --artifacts-dir _vei_out/gpt5_llmtest --success-mode full
 ```
+
+### Latest live run snapshot (2025‑09‑18)
+- Command: `VEI_ARTIFACTS_DIR=_vei_out/gpt5_llmtest VEI_SEED=42042 vei-llm-test --model gpt-5 --max-steps 32`
+- Score extract:
+  ```json
+  {
+    "success": false,
+    "subgoals": {"citations": 1, "approval": 0, "email_sent": 1, "email_parsed": 0},
+    "costs": {"actions": 120, "time_ms": 309657},
+    "policy": {"warning_count": 0, "error_count": 0}
+  }
+  ```
+- What happened: GPT‑5 looped on `vei.observe` + `browser.read` and repeatedly issued `mail.compose` with a minimal body, but it never called `slack.send_message`, so no approval arrived. The vendor reply (`"VendorA quote: $1006, ETA: 5 days."`) did land, but our current scoring regex looks for “price/total”, so that variant did not flip `email_parsed`. Environment plumbing, drift jobs, and tool registry all executed as expected; this is a model-planning miss.
 
 Notes on model behavior and failure modes
 - **Empty/observe plans**: If the model outputs `{}` or explicitly chooses `vei.observe`, no tool call is executed and no `trace.jsonl` entry is produced. This is not a transport failure, but the episode will not reach success and scoring will return `success: false`.
@@ -318,9 +334,11 @@ python examples/llm_stdio_min.py        # minimal live LLM loop over stdio (no S
 - **MCP server**: `VEI_HOST`, `VEI_PORT` (defaults `127.0.0.1`, `3001`).
 - **SSE URL**: `VEI_SSE_URL` (default `http://127.0.0.1:3001/sse`).
 - **Artifacts**: `VEI_ARTIFACTS_DIR=/abs/out` writes `trace.jsonl`.
+- **State store**: `VEI_STATE_DIR=/abs/state` enables disk-backed snapshots and receipts (see `vei-state`).
 - **Transcript**: `VEI_TRANSCRIPT_OUT=/abs/transcript.json` to save transcript JSON (used by `examples/llm_stdio_min.py`).
 - **Streaming**: `VEI_TRACE_POST_URL=https://collector.example/trace` streams entries (best-effort POST).
 - **Scenarios**: set `VEI_SCENARIO` to a catalog name, `VEI_SCENARIO_CONFIG` to JSON or a file path for a template, or `VEI_SCENARIO_RANDOM=1` to pick a random catalog entry.
+- **Policy overrides**: `VEI_POLICY_PROMOTE=code[:severity][,code2...]` promotes monitor codes to policy findings (e.g., `VEI_POLICY_PROMOTE=usage.repetition:error`).
 - **OpenAI-compatible routing**: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`.
 - **CLI overrides**: `--openai-base-url`, `--openai-api-key`.
 - **Autostart**: set `VEI_DISABLE_AUTOSTART=1` to prevent background SSE startup.
@@ -363,11 +381,19 @@ _vei_out/run_TIMESTAMP/
 └── trace.jsonl         # Detailed execution trace
 ```
 
+### State snapshots & receipts
+- `vei-state list --state-dir ./_vei_state` — enumerate snapshots for a branch.
+- `vei-state show --snapshot 0 --include-state` — inspect recorded state payloads.
+- `vei-state diff --snapshot-from 0 --snapshot-to 5` — view structural changes between snapshots.
+- `vei-state receipts --tail 5` — tail recent tool-call receipts for auditing.
+- Snapshots now include `monitor_findings` and `policy_findings` generated during live runs.
+
 ### Scoring
 ```bash
 vei-score --artifacts-dir ./_vei_out/run_20240115_143022
 ```
 Evaluates task completion, subgoals, costs (action count), provenance, and constraint compliance.
+Policy section of the JSON response includes any promoted findings (warnings/errors) driven by tool-aware monitors and `VEI_POLICY_PROMOTE` overrides.
 
 ## Scenarios
 - Built-in names (set `VEI_SCENARIO`):

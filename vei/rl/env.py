@@ -33,9 +33,11 @@ class VEIEnv:  # Gymnasium-compatible but avoids hard dependency at import time
         # Lazy spaces if gymnasium is available
         if spaces is not None:
             self.observation_space = spaces.Dict({})  # free-form dict
+            # Clamp tool name length to keep gymnasium validators happy without changing behaviour.
             self.action_space = spaces.Dict({
-                "tool": spaces.Text(min_length=1),
-                "args": spaces.Dict({}, optional_keys=None),
+                "tool": spaces.Text(min_length=1, max_length=128),
+                # Empty Dict space is permissive enough for RL experiments; args schema enforced downstream by router.
+                "args": spaces.Dict({}),
             })
         else:  # pragma: no cover
             self.observation_space = None  # type: ignore[assignment]
@@ -155,6 +157,3 @@ def _has_eta(text: str) -> bool:
     import re
     pat = re.compile(r"\beta\s*(?::|-)\s*([^\n]+)", re.I)
     return bool(pat.search(text))
-
-
-
