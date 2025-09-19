@@ -23,3 +23,22 @@ def test_compute_score_promotes_monitor_to_policy(tmp_path: Path) -> None:
     assert policy.get("warning_count", 0) >= 1
     codes = {f["code"] for f in policy.get("findings", [])}
     assert "slack.approval_missing_amount" in codes
+
+
+def test_compute_score_accepts_budget_amount(tmp_path: Path) -> None:
+    art = tmp_path / "run_balance"
+    records = [
+        {
+            "type": "call",
+            "tool": "slack.send_message",
+            "args": {"channel": "#procurement", "text": "Please approve with budget $3,200."},
+            "response": {"ts": "3"},
+            "time_ms": 1000,
+        },
+    ]
+    write_trace(art, records)
+
+    score = compute_score(art)
+    policy = score.get("policy", {})
+    codes = {f["code"] for f in policy.get("findings", [])}
+    assert "slack.approval_missing_amount" not in codes

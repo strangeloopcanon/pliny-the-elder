@@ -121,7 +121,18 @@ def compute_score(artifacts_dir: str | Path, success_mode: Literal["email", "ful
         "success_email_only": success_email,
         "success_full_flow": success_full,
     }
+_AMOUNT_PATTERN = re.compile(
+    r"""
+    (?:
+        \$\s*\d+(?:,\d{3})*(?:\.\d+)?                      # $123,456.78 or $ 1234
+      | (?:usd|dollars?)\s*\d+(?:,\d{3})*(?:\.\d+)?          # usd1234 or dollars 1,234
+      | \d+(?:,\d{3})*(?:\.\d+)?\s*(?:usd|dollars?)          # 1,234 USD
+      | (?:budget|amount)\s*(?:is|=|:)?\s*\d+(?:,\d{3})*(?:\.\d+)?  # budget 3200
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def _has_amount(text: str) -> bool:
-    return bool(re.search(r"\$\s*[0-9]|[0-9]{3,}", text))
+    return bool(_AMOUNT_PATTERN.search(text))
