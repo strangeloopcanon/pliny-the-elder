@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
-from typing import Literal
+from typing import Dict, Literal
 
 
 def compute_score(artifacts_dir: str | Path, success_mode: Literal["email", "full"] = "email") -> dict:
@@ -15,6 +16,20 @@ def compute_score(artifacts_dir: str | Path, success_mode: Literal["email", "ful
     slack_events: list[dict] = []
     mail_events: list[dict] = []
     max_time_ms = 0
+    tool_counts: Counter[str] = Counter()
+    policy_findings: list[dict] = []
+
+    def _add_policy(code: str, message: str, *, severity: str, tool: str | None, time_ms: int, metadata: Dict[str, object] | None = None) -> None:
+        policy_findings.append(
+            {
+                "code": code,
+                "message": message,
+                "severity": severity,
+                "tool": tool,
+                "time_ms": time_ms,
+                "metadata": metadata or {},
+            }
+        )
 
     for raw in trace_path.read_text(encoding="utf-8").splitlines():
         if not raw.strip():
@@ -23,6 +38,39 @@ def compute_score(artifacts_dir: str | Path, success_mode: Literal["email", "ful
         max_time_ms = max(max_time_ms, int(rec.get("time_ms", 0)))
         if rec.get("type") == "call":
             calls.append(rec)
+            tool = rec.get("tool", "")
+            tool_counts[tool] += 1
+            call_time = int(rec.get("time_ms", max_time_ms))
+            count = tool_counts[tool]
+            if count in {5, 10}:
+                _add_policy(
+                    "usage.repetition",
+                    f"Tool '{tool}' invoked {count} times in run",
+                    severity="info",
+                    tool=tool,
+                    time_ms=call_time,
+                    metadata={"count": count},
+                )
+            if tool == "slack.send_message":
+                text = str(rec.get("args", {}).get("text", ""))
+                if "approve" in text.lower() and not _has_amount(text):
+                    _add_policy(
+                        "slack.approval_missing_amount",
+                        "Approval message lacks budget amount",
+                        severity="warning",
+                        tool=tool,
+                        time_ms=call_time,
+                        metadata={"text": text},
+                    )
+            if tool == "mail.compose" and count in {3, 5}:
+                _add_policy(
+                    "mail.outbound_volume",
+                    "Multiple outbound emails have been sent in this session",
+                    severity="info",
+                    tool=tool,
+                    time_ms=call_time,
+                    metadata={"count": count},
+                )
         elif rec.get("type") == "event":
             if rec.get("target") == "slack":
                 slack_events.append(rec)
@@ -57,13 +105,23 @@ def compute_score(artifacts_dir: str | Path, success_mode: Literal["email", "ful
         mode = "email"
     success = success_email if mode == "email" else success_full
 
+    policy_summary = {
+        "findings": policy_findings,
+        "warning_count": sum(1 for f in policy_findings if f["severity"] == "warning"),
+        "error_count": sum(1 for f in policy_findings if f["severity"] == "error"),
+    }
+
     return {
         "success": success,
         "subgoals": subgoals,
         "costs": {"actions": len(calls), "time_ms": max_time_ms},
         "provenance_ok": True,
+        "policy": policy_summary,
+        "usage": dict(tool_counts),
         "success_email_only": success_email,
         "success_full_flow": success_full,
     }
 
 
+def _has_amount(text: str) -> bool:
+    return bool(re.search(r"\$\s*[0-9]|[0-9]{3,}", text))

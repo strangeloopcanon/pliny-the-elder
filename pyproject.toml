@@ -47,6 +47,7 @@ vei-chat = "vei.cli.vei_chat:app"
 vei-scenarios = "vei.cli.vei_scenarios:app"
 vei-demo = "vei.cli.vei_demo:app"
 vei-serve = "vei.cli.vei_serve:app"
+vei-state = "vei.cli.vei_state:state"
 
 [tool.setuptools.packages.find]
 where = ["."]

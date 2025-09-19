@@ -369,6 +369,14 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
     def vei_pending() -> dict[str, int]:
         return R().pending()
 
+    @srv.tool(name="vei.state", description="Inspect state head, receipts, and recent tool calls")
+    def vei_state(include_state: bool = False, tool_tail: int = 20, include_receipts: bool = True) -> dict[str, Any]:
+        return R().state_snapshot(
+            include_state=include_state,
+            tool_tail=tool_tail,
+            include_receipts=include_receipts,
+        )
+
     @srv.tool(name="vei.help", description="Usage help: how to interact via MCP and example actions")
     def vei_help() -> dict[str, Any]:
         return {
@@ -383,6 +391,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
                 {"tool": "vei.act_and_observe", "args": {"tool": "str", "args": "object"}},
                 {"tool": "vei.tick", "args": {"dt_ms": "int?"}},
                 {"tool": "vei.pending", "args": {}},
+                {"tool": "vei.state", "args": {"tool_tail": "int?", "include_state": "bool?"}},
                 {"tool": "vei.reset", "args": {"seed": "int?"}},
                 {"tool": "browser.read", "args": {}},
                 {"tool": "browser.find", "args": {"query": "str", "top_k": "int?"}},
@@ -417,6 +426,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
                 {"tool": "browser.read", "args": {}},
                 {"tool": "slack.send_message", "args": {"channel": "#procurement", "text": "Summary: budget $3200, citations included."}},
                 {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example", "subj": "Quote request", "body_text": "Please send latest price and ETA."}},
+                {"tool": "vei.state", "args": {"tool_tail": 5}},
                 {"tool": "vei.ping", "args": {}},
                 {"tool": "vei.reset", "args": {"seed": 42042}},
                 {"tool": "vei.act_and_observe", "args": {"tool": "browser.read", "args": {}}},

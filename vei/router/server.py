@@ -41,6 +41,15 @@ def jsonrpc_loop(router: Router) -> None:
                         old = router
                         router = Router(seed=seed, artifacts_dir=old.trace.out_dir, scenario=old.scenario)
                         res = {"ok": True, "seed": seed, "time_ms": router.bus.clock_ms}
+                    elif tool == "vei.state":
+                        include_state = bool(args.get("include_state", False))
+                        tool_tail = int(args.get("tool_tail", 20) or 0)
+                        include_receipts = args.get("include_receipts", True)
+                        res = router.state_snapshot(
+                            include_state=include_state,
+                            tool_tail=tool_tail,
+                            include_receipts=bool(include_receipts),
+                        )
                     elif tool == "vei.help":
                         # Return usage guidance and tool catalog similar to FastMCP server
                         res = {
@@ -78,6 +87,7 @@ def jsonrpc_loop(router: Router) -> None:
                                 {"tool": "browser.read", "args": {}},
                                 {"tool": "slack.send_message", "args": {"channel": "#procurement", "text": "Summary: budget $3200, citations included."}},
                                 {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example", "subj": "Quote request", "body_text": "Please send latest price and ETA."}},
+                                {"tool": "vei.state", "args": {"tool_tail": 5}},
                             ],
                         }
                     else:
@@ -109,6 +119,7 @@ def jsonrpc_loop(router: Router) -> None:
                     "vei.pending",
                     "vei.reset",
                     "vei.act_and_observe",
+                    "vei.state",
                     "vei.help",
                 ]
                 resp = {"jsonrpc": "2.0", "id": req.get("id"), "result": tools}
