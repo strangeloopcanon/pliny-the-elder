@@ -18,6 +18,9 @@ from vei.monitors.models import MonitorFinding
 from vei.policy import DEFAULT_RULES, PolicyEngine, PromoteMonitorRule
 from vei.world.drift import DriftEngine
 from vei.world.state import Event as StateEvent, StateStore
+from .calendar import CalendarSim
+from .docs import DocsSim
+from .tickets import TicketsSim
 from .tool_registry import ToolRegistry, ToolSpec
 
 
@@ -188,6 +191,26 @@ class TraceLogger:
             for entry in self.entries[self._flush_idx : ]:
                 f.write(json.dumps(entry, separators=(",", ":")) + "\n")
         self._flush_idx = len(self.entries)
+
+
+FAULT_PROFILES: Dict[str, Dict[str, float]] = {
+    "off": {},
+    "light": {
+        "mail.compose": 0.05,
+        "mail.reply": 0.04,
+        "slack.send_message": 0.02,
+        "calendar.create_event": 0.03,
+        "tickets.create": 0.03,
+    },
+    "spiky": {
+        "mail.compose": 0.12,
+        "mail.reply": 0.1,
+        "slack.send_message": 0.08,
+        "calendar.create_event": 0.1,
+        "tickets.create": 0.12,
+        "docs.update": 0.05,
+    },
+}
 
 
 def _reduce_router_init(state: Dict[str, Any], event: StateEvent) -> None:
@@ -578,6 +601,11 @@ class Router:
 
         self.registry = ToolRegistry()
         self._seed_tool_registry()
+        fault_profile_env = os.environ.get("VEI_FAULT_PROFILE", "off").strip().lower()
+        if fault_profile_env not in FAULT_PROFILES:
+            fault_profile_env = "off"
+        self.fault_profile = fault_profile_env
+        self._fault_overrides = dict(FAULT_PROFILES.get(fault_profile_env, {}))
         monitors_env = os.environ.get("VEI_MONITORS", "").strip()
         monitor_names = [m.strip() for m in (monitors_env.split(",") if monitors_env else []) if m.strip()]
         self.monitor_manager = MonitorManager(self.registry, monitor_names)
@@ -601,6 +629,25 @@ class Router:
         self.slack = SlackSim(self.bus, self.scenario)
         self.mail = MailSim(self.bus, self.scenario)
         self.browser = BrowserVirtual(self.bus, self.scenario)
+        dataset_path = os.environ.get("VEI_DATASET")
+        if dataset_path:
+            try:
+                from vei.data.models import VEIDataset
+                from vei.world.replay import ReplayAdapter
+                import json
+
+                data = json.loads(Path(dataset_path).read_text(encoding="utf-8"))
+                dataset = VEIDataset.model_validate(data)
+                adapter = ReplayAdapter(self.bus, dataset.events)
+                adapter.prime()
+                self.replay_adapter = adapter
+            except Exception:
+                self.replay_adapter = None
+        else:
+            self.replay_adapter = None
+        self.docs = DocsSim(self.scenario)
+        self.calendar = CalendarSim(self.scenario)
+        self.tickets = TicketsSim(self.scenario)
         for evt in self.scenario.derail_events or []:
             try:
                 dt = int(evt.get("dt_ms", 0))
@@ -846,6 +893,8 @@ class Router:
                 side_effects=("slack_outbound",),
                 permissions=("slack:write",),
                 default_latency_ms=500,
+                latency_jitter_ms=200,
+                fault_probability=0.01,
             ),
             ToolSpec(
                 name="slack.open_channel",
@@ -876,6 +925,8 @@ class Router:
                 side_effects=("mail_outbound", "event_schedule"),
                 permissions=("mail:write",),
                 default_latency_ms=800,
+                latency_jitter_ms=300,
+                fault_probability=0.02,
             ),
             ToolSpec(
                 name="mail.list",
@@ -893,6 +944,8 @@ class Router:
                 side_effects=("mail_outbound", "event_schedule"),
                 permissions=("mail:write",),
                 default_latency_ms=800,
+                latency_jitter_ms=300,
+                fault_probability=0.02,
             ),
             ToolSpec(
                 name="browser.read",
@@ -935,6 +988,108 @@ class Router:
                 permissions=("browser:write",),
             ),
         ]
+        docs_specs = [
+            ToolSpec(
+                name="docs.list",
+                description="List documents in the knowledge base.",
+                permissions=("docs:read",),
+            ),
+            ToolSpec(
+                name="docs.read",
+                description="Read a document by id.",
+                permissions=("docs:read",),
+            ),
+            ToolSpec(
+                name="docs.search",
+                description="Search documents for a query.",
+                permissions=("docs:read",),
+            ),
+            ToolSpec(
+                name="docs.create",
+                description="Create a new document entry.",
+                permissions=("docs:write",),
+                side_effects=("docs_mutation",),
+                default_latency_ms=400,
+                latency_jitter_ms=150,
+            ),
+            ToolSpec(
+                name="docs.update",
+                description="Update an existing document.",
+                permissions=("docs:write",),
+                side_effects=("docs_mutation",),
+                default_latency_ms=350,
+                latency_jitter_ms=120,
+            ),
+        ]
+        calendar_specs = [
+            ToolSpec(
+                name="calendar.list_events",
+                description="List upcoming calendar events.",
+                permissions=("calendar:read",),
+            ),
+            ToolSpec(
+                name="calendar.create_event",
+                description="Create a new calendar event.",
+                permissions=("calendar:write",),
+                side_effects=("calendar_mutation",),
+                default_latency_ms=600,
+                latency_jitter_ms=200,
+            ),
+            ToolSpec(
+                name="calendar.accept",
+                description="Accept a calendar invite.",
+                permissions=("calendar:write",),
+                side_effects=("calendar_response",),
+                default_latency_ms=300,
+                latency_jitter_ms=150,
+            ),
+            ToolSpec(
+                name="calendar.decline",
+                description="Decline a calendar invite.",
+                permissions=("calendar:write",),
+                side_effects=("calendar_response",),
+                default_latency_ms=300,
+                latency_jitter_ms=150,
+            ),
+        ]
+        ticket_specs = [
+            ToolSpec(
+                name="tickets.list",
+                description="List tickets in the queue.",
+                permissions=("tickets:read",),
+            ),
+            ToolSpec(
+                name="tickets.get",
+                description="Fetch ticket details.",
+                permissions=("tickets:read",),
+            ),
+            ToolSpec(
+                name="tickets.create",
+                description="Create a new ticket.",
+                permissions=("tickets:write",),
+                side_effects=("tickets_mutation",),
+                default_latency_ms=500,
+                latency_jitter_ms=200,
+                fault_probability=0.03,
+            ),
+            ToolSpec(
+                name="tickets.update",
+                description="Update ticket fields.",
+                permissions=("tickets:write",),
+                side_effects=("tickets_mutation",),
+                default_latency_ms=400,
+                latency_jitter_ms=150,
+            ),
+            ToolSpec(
+                name="tickets.transition",
+                description="Transition a ticket to a new status.",
+                permissions=("tickets:write",),
+                side_effects=("tickets_mutation",),
+                default_latency_ms=420,
+                latency_jitter_ms=160,
+                fault_probability=0.02,
+            ),
+        ]
         # ERP and CRM specs are registered lazily to avoid importing optional twins here.
         erp_specs = [
             ToolSpec(name="erp.create_po", description="Create a purchase order.", permissions=("erp:write",)),
@@ -961,6 +1116,9 @@ class Router:
             ToolSpec(name="crm.update_deal_stage", description="Update deal stage.", permissions=("crm:write",)),
             ToolSpec(name="crm.log_activity", description="Log an activity.", permissions=("crm:write",)),
         ]
+        specs.extend(docs_specs)
+        specs.extend(calendar_specs)
+        specs.extend(ticket_specs)
         specs.extend(erp_specs)
         specs.extend(crm_specs)
         for spec in specs:
@@ -993,12 +1151,27 @@ class Router:
                 emitted = {}
             self.trace.record_event(evt.target, evt.payload, emitted, time_ms=self.bus.clock_ms)
             self._record_event_delivery(evt.target, evt.payload)
-        self.bus.advance(1000)
+        self.bus.advance(self._tool_latency_ms(tool))
         # Persist after each step when artifacts directory is configured
         self.trace.flush()
         return result
 
     def _execute(self, tool: str, args: Dict[str, Any]) -> Any:
+        if tool == "vei.observe":
+            focus = args.get("focus") if isinstance(args, dict) else None
+            return self.observe(focus_hint=focus).model_dump()
+        if tool == "vei.tick":
+            return self.tick(**args)
+        if tool == "vei.state":
+            return self.state_snapshot(**args)
+        if tool == "vei.act_and_observe":
+            target_tool = args.get("tool")
+            target_args = args.get("args", {})
+            if not target_tool:
+                raise MCPError("invalid_args", "act_and_observe requires tool")
+            return self.act_and_observe(target_tool, target_args)
+        if not tool.startswith("vei."):
+            self._maybe_fault(tool)
         if tool == "slack.list_channels":
             return self.slack.list_channels()
         if tool == "slack.open_channel":
@@ -1033,6 +1206,43 @@ class Router:
             return self.browser.read()
         if tool == "browser.back":
             return self.browser.back()
+
+        if tool.startswith("docs."):
+            if tool == "docs.list":
+                return self.docs.list()
+            if tool == "docs.read":
+                return self.docs.read(**args)
+            if tool == "docs.search":
+                return self.docs.search(**args)
+            if tool == "docs.create":
+                return self.docs.create(**args)
+            if tool == "docs.update":
+                return self.docs.update(**args)
+            raise MCPError("unknown_tool", f"No such tool: {tool}")
+
+        if tool.startswith("calendar."):
+            if tool == "calendar.list_events":
+                return self.calendar.list_events()
+            if tool == "calendar.create_event":
+                return self.calendar.create_event(**args)
+            if tool == "calendar.accept":
+                return self.calendar.accept(**args)
+            if tool == "calendar.decline":
+                return self.calendar.decline(**args)
+            raise MCPError("unknown_tool", f"No such tool: {tool}")
+
+        if tool.startswith("tickets."):
+            if tool == "tickets.list":
+                return self.tickets.list()
+            if tool == "tickets.get":
+                return self.tickets.get(**args)
+            if tool == "tickets.create":
+                return self.tickets.create(**args)
+            if tool == "tickets.update":
+                return self.tickets.update(**args)
+            if tool == "tickets.transition":
+                return self.tickets.transition(**args)
+            raise MCPError("unknown_tool", f"No such tool: {tool}")
 
         # ERP tools
         if tool.startswith("erp."):
@@ -1105,10 +1315,7 @@ class Router:
             summary=self._summary(focus),
             screenshot_ref=None,
             action_menu=self._action_menu(focus),
-            pending_events={
-                "slack": self.bus.pending_count("slack"),
-                "mail": self.bus.pending_count("mail"),
-            },
+            pending_events=self._pending_counts(),
         )
 
     def step_and_observe(self, tool: str, args: Dict[str, Any]) -> Observation:
@@ -1119,6 +1326,12 @@ class Router:
             focus = "slack"
         elif tool.startswith("mail."):
             focus = "mail"
+        elif tool.startswith("docs."):
+            focus = "docs"
+        elif tool.startswith("calendar."):
+            focus = "calendar"
+        elif tool.startswith("tickets."):
+            focus = "tickets"
         elif tool.startswith("erp."):
             focus = "erp"
         elif tool.startswith("crm."):
@@ -1139,6 +1352,12 @@ class Router:
             focus = "slack"
         elif tool.startswith("mail."):
             focus = "mail"
+        elif tool.startswith("docs."):
+            focus = "docs"
+        elif tool.startswith("calendar."):
+            focus = "calendar"
+        elif tool.startswith("tickets."):
+            focus = "tickets"
         elif tool.startswith("erp."):
             focus = "erp"
         elif tool.startswith("crm."):
@@ -1148,18 +1367,14 @@ class Router:
 
     def pending(self) -> Dict[str, int]:
         """Return pending event counts per target without advancing time."""
-        return {
-            "slack": self.bus.pending_count("slack"),
-            "mail": self.bus.pending_count("mail"),
-            "total": self.bus.pending_count(),
-        }
+        return self._pending_counts()
 
     def tick(self, dt_ms: int = 1000) -> Dict[str, Any]:
         """Advance logical time by dt_ms and deliver all due events deterministically.
 
         Returns the number of delivered events per target and the new time.
         """
-        delivered = {"slack": 0, "mail": 0}
+        delivered = {"slack": 0, "mail": 0, "calendar": 0, "docs": 0, "tickets": 0}
         target_time = self.bus.clock_ms + max(0, int(dt_ms))
         # Deliver in order at due timestamps
         while (self.bus.peek_due_time() is not None) and (self.bus.peek_due_time() <= target_time):
@@ -1211,10 +1426,7 @@ class Router:
             summary=self._summary(focus),
             screenshot_ref=None,
             action_menu=self._action_menu(focus),
-            pending_events={
-                "slack": self.bus.pending_count("slack"),
-                "mail": self.bus.pending_count("mail"),
-            },
+            pending_events=self._pending_counts(),
         )
         # Persist observations/events so trace is available while running
         self.trace.flush()
@@ -1233,6 +1445,23 @@ class Router:
             if lst:
                 return f"Mail: {lst[0]['subj']} from {lst[0]['from']}"
             return "Mail: INBOX empty"
+        if focus == "docs":
+            docs = self.docs.list()
+            if not docs:
+                return "Docs: empty library"
+            return f"Docs: {len(docs)} available (latest: {docs[-1]['title']})"
+        if focus == "calendar":
+            events = self.calendar.list_events()
+            if not events:
+                return "Calendar: no scheduled events"
+            soon = events[0]
+            return f"Calendar: next {soon['title']} at {soon['start_ms']}"
+        if focus == "tickets":
+            tickets = self.tickets.list()
+            if not tickets:
+                return "Tickets: queue empty"
+            open_count = sum(1 for t in tickets if t['status'].lower() != 'closed')
+            return f"Tickets: {open_count} open of {len(tickets)}"
         if focus == "erp":
             # Surface a short state summary for agents
             pos = len(getattr(self, "erp").pos) if getattr(self, "erp", None) else 0
@@ -1243,6 +1472,37 @@ class Router:
             ds = len(getattr(self, "crm").deals) if getattr(self, "crm", None) else 0
             return f"CRM: {cs} contacts, {ds} deals"
         return ""
+
+    def _pending_counts(self) -> Dict[str, int]:
+        counts = {
+            "slack": self.bus.pending_count("slack"),
+            "mail": self.bus.pending_count("mail"),
+            "docs": 0,
+            "calendar": 0,
+            "tickets": 0,
+        }
+        counts["total"] = self.bus.pending_count()
+        return counts
+
+    def _maybe_fault(self, tool: str) -> None:
+        prob = self._fault_overrides.get(tool)
+        if prob is None:
+            spec = self.registry.get(tool)
+            prob = spec.fault_probability if spec else 0.0
+        if prob and prob > 0:
+            if self.bus.rng.next_float() < prob:
+                raise MCPError("fault.injected", f"Injected fault for {tool}")
+
+    def _tool_latency_ms(self, tool: str) -> int:
+        if tool.startswith("vei."):
+            return 0
+        base = 1000
+        spec = self.registry.get(tool)
+        if spec:
+            base = max(base, spec.default_latency_ms or base)
+            if spec.latency_jitter_ms > 0:
+                base += self.bus.rng.randint(0, spec.latency_jitter_ms)
+        return base
 
     def _action_menu(self, focus: str) -> List[Dict[str, Any]]:
         if focus == "browser":
@@ -1262,6 +1522,39 @@ class Router:
         if focus == "mail":
             return [
                 {"tool": "mail.compose", "args_schema": {"to": "str", "subj": "str", "body_text": "str"}},
+            ]
+        if focus == "docs":
+            return [
+                {"tool": "docs.list", "args_schema": {}},
+                {"tool": "docs.search", "args_schema": {"query": "str"}},
+                {"tool": "docs.read", "args_schema": {"doc_id": "str"}},
+                {"tool": "docs.create", "args_schema": {"title": "str", "body": "str", "tags": "[str]?"}},
+                {"tool": "docs.update", "args_schema": {"doc_id": "str", "title": "str?", "body": "str?", "tags": "[str]?"}},
+            ]
+        if focus == "calendar":
+            return [
+                {"tool": "calendar.list_events", "args_schema": {}},
+                {
+                    "tool": "calendar.create_event",
+                    "args_schema": {
+                        "title": "str",
+                        "start_ms": "int",
+                        "end_ms": "int",
+                        "attendees": "[str]?",
+                        "location": "str?",
+                        "description": "str?",
+                    },
+                },
+                {"tool": "calendar.accept", "args_schema": {"event_id": "str", "attendee": "str"}},
+                {"tool": "calendar.decline", "args_schema": {"event_id": "str", "attendee": "str"}},
+            ]
+        if focus == "tickets":
+            return [
+                {"tool": "tickets.list", "args_schema": {}},
+                {"tool": "tickets.get", "args_schema": {"ticket_id": "str"}},
+                {"tool": "tickets.create", "args_schema": {"title": "str", "description": "str?", "assignee": "str?"}},
+                {"tool": "tickets.update", "args_schema": {"ticket_id": "str", "description": "str?", "assignee": "str?"}},
+                {"tool": "tickets.transition", "args_schema": {"ticket_id": "str", "status": "str"}},
             ]
         if focus == "erp" and getattr(self, "erp", None):
             return [

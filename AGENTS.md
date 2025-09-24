@@ -14,6 +14,13 @@
 - Transport smoke (no API key): `vei-smoke --transport stdio --timeout-s 30`
 - Demo and CLI: `vei-demo --mode llm --model gpt-5 --artifacts-dir ./_vei_out/demo`
 - Start SSE server (optional): `VEI_SEED=42042 python -m vei.router.sse`
+- Dataset/rollout pipeline:
+  - `vei-pack slack|mail|tickets|docs` to turn exports into canonical datasets.
+  - `vei-rollout procurement --episodes 5 --seed 42042 --output ./_vei_out/rollout.json` for scripted traces.
+  - `vei-train bc --dataset ./_vei_out/rollout.json --output ./_vei_out/bc_policy.json` to learn a BC policy.
+  - `vei-eval scripted` / `vei-eval bc --model ...` to produce trace + score artifacts.
+  - `vei-llm-test --dataset ./_vei_out/rollout.json --artifacts ./_vei_out/llm_eval` for LLM evals in replay context.
+- Rich scenarios: set `VEI_SCENARIO=multi_channel` for docs/tickets/mail coverage during manual or LLM-driven evaluations.
 
 ## Coding Style & Conventions
 - Language: Python 3.11+, 4‑space indent, PEP8.
@@ -40,4 +47,3 @@
 ## Architecture Overview
 - Router exposes MCP tools: `slack.*`, `mail.*`, `browser.*`, `vei.*`.
 - Two transports: stdio (default for dev/CI) and SSE (`vei.router.sse`). Keep new tools deterministic and replay‑friendly.
-

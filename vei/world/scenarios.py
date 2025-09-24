@@ -5,7 +5,7 @@ import os
 import random
 from typing import Any, Dict, List, Optional
 
-from .scenario import Scenario
+from .scenario import Scenario, Document, Ticket
 
 
 def scenario_macrocompute_default() -> Scenario:
@@ -81,9 +81,50 @@ def scenario_extended_store() -> Scenario:
     )
 
 
+def scenario_multi_channel() -> Scenario:
+    docs = {
+        "policy": Document(
+            doc_id="POLICY-1",
+            title="Expense Policy",
+            body="All purchases over $2000 require manager approval.",
+            tags=["policy"],
+        )
+    }
+    tickets = {
+        "TCK-42": Ticket(
+            ticket_id="TCK-42",
+            title="Procurement Request",
+            status="open",
+            description="Acquire MacroBook Pro 16",
+            history=[{"status": "open"}],
+        )
+    }
+    events = [
+        {
+            "dt_ms": 5000,
+            "target": "mail",
+            "payload": {
+                "from": "vendor@example.com",
+                "body_text": "Quote $3199, ETA 5 days",
+                "subj": "Quote",
+            },
+        }
+    ]
+    return Scenario(
+        budget_cap_usd=3200,
+        derail_prob=0.05,
+        slack_initial_message="Please reference ticket TCK-42 and attach documentation.",
+        vendor_reply_variants=["Quote: $3199, ETA 5 days"],
+        documents=docs,
+        tickets=tickets,
+        derail_events=events,
+    )
+
+
 _CATALOG: Dict[str, Scenario] = {
     "macrocompute_default": scenario_macrocompute_default(),
     "extended_store": scenario_extended_store(),
+    "multi_channel": scenario_multi_channel(),
 }
 
 
@@ -174,4 +215,3 @@ def load_from_env(seed: Optional[int] = None) -> Scenario:
         return _CATALOG[key]
 
     return Scenario()
-

@@ -69,13 +69,20 @@ async def run_episode(
     openai_base_url: str | None = None,
     openai_api_key: str | None = None,
     task: str | None = None,
+    dataset_path: str | None = None,
+    artifacts_dir: str | None = None,
 ) -> list[dict]:
     # stdio-only transport
     py = os.environ.get("PYTHON", None) or (sys.executable if 'sys' in globals() else None)
     if not py:
         import sys as _sys
         py = _sys.executable or "python3"
-    params = StdioServerParameters(command=py, args=["-m", "vei.router"], env={**os.environ, "VEI_DISABLE_AUTOSTART": "1"})
+    env = {**os.environ, "VEI_DISABLE_AUTOSTART": "1"}
+    if dataset_path:
+        env["VEI_DATASET"] = dataset_path
+    if artifacts_dir:
+        env["VEI_ARTIFACTS_DIR"] = artifacts_dir
+    params = StdioServerParameters(command=py, args=["-m", "vei.router"], env=env)
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -241,6 +248,8 @@ def run(
     openai_api_key: str | None = typer.Option(None, help="Override OPENAI_API_KEY for SDK"),
     max_steps: int = typer.Option(12, help="Max tool steps"),
     task: str | None = typer.Option(None, help="High-level goal for the LLM (prefixed as 'Task: ...')"),
+    dataset: Path | None = typer.Option(None, help="Optional dataset JSON to prime replay"),
+    artifacts: Path | None = typer.Option(None, help="Optional artifacts directory for traces"),
 ) -> None:
     load_dotenv(override=True)
     if not (openai_api_key or os.getenv("OPENAI_API_KEY")):
@@ -253,6 +262,8 @@ def run(
             openai_base_url=openai_base_url,
             openai_api_key=openai_api_key,
             task=task,
+            dataset_path=str(dataset) if dataset else None,
+            artifacts_dir=str(artifacts) if artifacts else None,
         )
     )
     typer.echo(json.dumps(transcript, indent=2))

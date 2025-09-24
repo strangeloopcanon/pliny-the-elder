@@ -112,6 +112,49 @@ print(compute_score('_vei_out/rl_run'))
 PY
 ```
 
+### Dataset tooling & evaluation
+
+Generate scripted rollouts, package replay datasets, and evaluate agents:
+
+```bash
+# Scripted rollout → canonical dataset
+vei-rollout procurement --episodes 3 --seed 42042 --output ./_vei_out/rollout.json
+
+# Package sources into datasets (Slack/Mail/Tickets/Docs)
+vei-pack slack --export-path ./slack_export --output ./datasets/slack.json
+vei-pack mail --mail-dir ./mail_messages --output ./datasets/mail.json
+vei-pack tickets --tickets-dir ./ticket_updates --output ./datasets/tickets.json
+vei-pack docs --docs-dir ./docs_snapshot --output ./datasets/docs.json
+
+# Train a behavior-cloning policy from rollout data
+vei-train bc --dataset ./_vei_out/rollout.json --output ./_vei_out/bc_policy.json
+
+# Evaluate scripted baseline or BC policy (writes traces + score.json)
+vei-eval scripted --seed 42042 --artifacts ./_vei_out/eval_scripted
+vei-eval bc --model ./_vei_out/bc_policy.json --seed 42042 --artifacts ./_vei_out/eval_bc
+```
+
+LLM evaluations run against the same MCP router and can optionally prime datasets:
+
+```bash
+vei-llm-test --model gpt-5 --task "Research vendor quote" --dataset ./_vei_out/rollout.json \
+  --artifacts ./_vei_out/llm_eval
+
+LLM evaluations also support fully unscripted runs against richer scenarios. For example,
+
+```bash
+# Use the multi-channel scenario (tickets + docs + seeded vendor reply)
+export VEI_SCENARIO=multi_channel
+vei-llm-test --model gpt-5 \
+  --task "Review ticket TCK-42, gather laptop quote, and email results" \
+  --max-steps 12 --artifacts ./_vei_out/llm_eval_multichannel
+```
+
+After the run, inspect `_vei_out/llm_eval_multichannel/trace.jsonl` and
+`score.json` to analyse behaviour. Unset `VEI_SCENARIO` to return to the
+default environment.
+```
+
 ### Testing
 Prefer invoking pytest via the active interpreter to avoid host shims:
 ```bash

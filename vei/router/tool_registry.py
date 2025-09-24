@@ -19,8 +19,10 @@ class ToolSpec:
     side_effects: Sequence[str] = field(default_factory=tuple)
     permissions: Sequence[str] = field(default_factory=tuple)
     default_latency_ms: int = 0
+    latency_jitter_ms: int = 0
     nominal_cost: float = 0.0
     returns: Optional[str] = None
+    fault_probability: float = 0.0
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -29,8 +31,10 @@ class ToolSpec:
             "side_effects": list(self.side_effects),
             "permissions": list(self.permissions),
             "default_latency_ms": self.default_latency_ms,
+            "latency_jitter_ms": self.latency_jitter_ms,
             "nominal_cost": self.nominal_cost,
             "returns": self.returns,
+            "fault_probability": self.fault_probability,
         }
 
 
@@ -61,4 +65,3 @@ class ToolRegistry:
 
     def describe(self) -> List[Dict[str, object]]:
         return [spec.to_dict() for spec in self.list()]
-
