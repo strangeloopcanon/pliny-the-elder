@@ -48,6 +48,10 @@ vei-scenarios = "vei.cli.vei_scenarios:app"
 vei-demo = "vei.cli.vei_demo:app"
 vei-serve = "vei.cli.vei_serve:app"
 vei-state = "vei.cli.vei_state:state"
+vei-pack = "vei.cli.vei_pack:app"
+vei-rollout = "vei.cli.vei_rollout:app"
+vei-train = "vei.cli.vei_train:app"
+vei-eval = "vei.cli.vei_eval:app"
 
 [tool.setuptools.packages.find]
 where = ["."]

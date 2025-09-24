@@ -211,6 +211,109 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
     def browser_submit(form_id: str) -> dict[str, Any]:
         return R().call_and_step("browser.submit", {"form_id": form_id})
 
+    @srv.tool(name="docs.list", description="List knowledge base documents")
+    def docs_list() -> list[dict[str, Any]]:
+        return R().call_and_step("docs.list", {})  # type: ignore[return-value]
+
+    @srv.tool(name="docs.read", description="Read a document")
+    def docs_read(doc_id: str) -> dict[str, Any]:
+        try:
+            return R().call_and_step("docs.read", {"doc_id": doc_id})
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    @srv.tool(name="docs.search", description="Search documents")
+    def docs_search(query: str) -> list[dict[str, Any]]:
+        return R().call_and_step("docs.search", {"query": query})  # type: ignore[return-value]
+
+    @srv.tool(name="docs.create", description="Create a document")
+    def docs_create(title: str, body: str, tags: list[str] | None = None) -> dict[str, Any]:
+        return R().call_and_step("docs.create", {"title": title, "body": body, "tags": tags})
+
+    @srv.tool(name="docs.update", description="Update a document")
+    def docs_update(doc_id: str, title: str | None = None, body: str | None = None, tags: list[str] | None = None) -> dict[str, Any]:
+        try:
+            return R().call_and_step(
+                "docs.update",
+                {"doc_id": doc_id, "title": title, "body": body, "tags": tags},
+            )
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    @srv.tool(name="calendar.list_events", description="List calendar events")
+    def calendar_list_events() -> list[dict[str, Any]]:
+        return R().call_and_step("calendar.list_events", {})  # type: ignore[return-value]
+
+    @srv.tool(name="calendar.create_event", description="Create a calendar event")
+    def calendar_create_event(
+        title: str,
+        start_ms: int,
+        end_ms: int,
+        attendees: list[str] | None = None,
+        location: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        return R().call_and_step(
+            "calendar.create_event",
+            {
+                "title": title,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "attendees": attendees,
+                "location": location,
+                "description": description,
+            },
+        )
+
+    @srv.tool(name="calendar.accept", description="Accept a calendar invite")
+    def calendar_accept(event_id: str, attendee: str) -> dict[str, Any]:
+        try:
+            return R().call_and_step("calendar.accept", {"event_id": event_id, "attendee": attendee})
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    @srv.tool(name="calendar.decline", description="Decline a calendar invite")
+    def calendar_decline(event_id: str, attendee: str) -> dict[str, Any]:
+        try:
+            return R().call_and_step("calendar.decline", {"event_id": event_id, "attendee": attendee})
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    @srv.tool(name="tickets.list", description="List tickets")
+    def tickets_list() -> list[dict[str, Any]]:
+        return R().call_and_step("tickets.list", {})  # type: ignore[return-value]
+
+    @srv.tool(name="tickets.get", description="Get ticket detail")
+    def tickets_get(ticket_id: str) -> dict[str, Any]:
+        try:
+            return R().call_and_step("tickets.get", {"ticket_id": ticket_id})
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    @srv.tool(name="tickets.create", description="Create a ticket")
+    def tickets_create(title: str, description: str | None = None, assignee: str | None = None) -> dict[str, Any]:
+        return R().call_and_step(
+            "tickets.create",
+            {"title": title, "description": description, "assignee": assignee},
+        )
+
+    @srv.tool(name="tickets.update", description="Update a ticket")
+    def tickets_update(ticket_id: str, description: str | None = None, assignee: str | None = None) -> dict[str, Any]:
+        try:
+            return R().call_and_step(
+                "tickets.update",
+                {"ticket_id": ticket_id, "description": description, "assignee": assignee},
+            )
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    @srv.tool(name="tickets.transition", description="Transition ticket status")
+    def tickets_transition(ticket_id: str, status: str) -> dict[str, Any]:
+        try:
+            return R().call_and_step("tickets.transition", {"ticket_id": ticket_id, "status": status})
+        except MCPError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
     @srv.tool(name="browser.read", description="Read current page")
     def browser_read() -> dict[str, Any]:
         return R().call_and_step("browser.read", {})

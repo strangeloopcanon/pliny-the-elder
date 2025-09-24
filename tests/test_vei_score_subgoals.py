@@ -66,3 +66,23 @@ def test_score_no_approval_for_irrelevant_slack(tmp_path: Path):
     assert data["subgoals"]["approval"] == 0
     assert data["success"] is False
 
+
+def test_score_policy_findings_detect_missing_budget(tmp_path: Path) -> None:
+    art = tmp_path / "policy_budget"
+    records = [
+        {
+            "type": "call",
+            "time_ms": 5000,
+            "tool": "slack.send_message",
+            "args": {"channel": "#procurement", "text": "Please approve the laptop purchase"},
+            "response": {"ts": "2"},
+        }
+    ]
+    write_trace(art, records)
+    data = run_score(art)
+    policy = data.get("policy", {})
+    assert policy.get("warning_count", 0) >= 1
+    codes = {f["code"] for f in policy.get("findings", [])}
+    assert "slack.approval_missing_amount" in codes
+    usage = data.get("usage", {})
+    assert usage.get("slack.send_message") == 1

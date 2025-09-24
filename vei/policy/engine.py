@@ -56,6 +56,9 @@ class PromoteMonitorRule(PolicyRule):
 DEFAULT_RULES: List[PolicyRule] = [
     PromoteMonitorRule("slack.approval_missing_amount", severity="warning"),
     PromoteMonitorRule("mail.outbound_volume", severity="info"),
+    PromoteMonitorRule("slack.approval_format", severity="info"),
+    PromoteMonitorRule("email.subject_quality", severity="info"),
+    PromoteMonitorRule("pii.leak", severity="error"),
 ]
 
 
