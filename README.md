@@ -34,7 +34,8 @@ Agent ──MCP──► VEI Router (this repo)
 
 ### Prerequisites
 - Python 3.11+
-- OpenAI API key (only for LLM demos/tests). Smoke tests and stdio transport do not require a key.
+- LLM API key(s) for demos/tests: OpenAI, Anthropic, Google, or OpenRouter
+- Smoke tests and stdio transport do not require a key
 
 ### Install
 ```bash
@@ -45,8 +46,11 @@ Optional: add `[browser]` only for live browser automation (Playwright).
 ### Configure
 Create a `.env` at the repo root:
 ```env
-# Required
-OPENAI_API_KEY=sk-your-actual-api-key-here
+# LLM Providers (add any/all you plan to use)
+OPENAI_API_KEY=sk-your-openai-key-here
+ANTHROPIC_API_KEY=sk-ant-your-anthropic-key-here
+GOOGLE_API_KEY=your-google-api-key-here       # or GEMINI_API_KEY
+OPENROUTER_API_KEY=sk-or-your-openrouter-key-here
 
 # Optional
 # OPENAI_BASE_URL=https://api.openai.com/v1
@@ -244,9 +248,25 @@ Examples (MCP):
  
 
 ### LLM models & API
-- GPT‑5 calls use the OpenAI Responses API (`client.responses.create`), not legacy Chat Completions.
-- No temperature or unsupported params are sent to GPT‑5/5‑mini.
-- Default prod model: `gpt-5`. Tests/smoke default: `gpt-5-mini` (override via `VEI_MODEL`).
+
+**Supported Providers:**
+- **OpenAI** (gpt-5, gpt-5-codex): Uses Responses API with reasoning
+- **Anthropic** (claude-sonnet-4-5): Messages API with JSON-enforcing prompts
+- **Google** (models/gemini-2.5-flash): Gemini API with JSON mode
+- **OpenRouter** (x-ai/grok-4): OpenAI-compatible API for Grok and other models
+
+**Provider Configuration:**
+- OpenAI: `max_output_tokens: 2048`, `reasoning.effort: "low"` for simple tasks
+- Anthropic: `max_tokens: 2048`, forceful JSON-only system prompts required
+- Google: Model name must include `models/` prefix (e.g., `models/gemini-2.5-flash`)
+- OpenRouter: `max_tokens: 2048`, `timeout: 90s` for reasoning models like Grok
+
+Run multi-provider evals:
+```bash
+./run_multi_provider_eval.sh
+```
+
+Default model: `gpt-5` (override via `VEI_MODEL` or `--model`).
 
 ## LLM Evaluation & Scoring (gpt‑5)
 
@@ -266,18 +286,45 @@ VEI_SEED=42042 vei-llm-test \
 vei-score --artifacts-dir _vei_out/gpt5_llmtest --success-mode full
 ```
 
-### Latest live run snapshot (2025‑09‑18)
-- Command: `VEI_ARTIFACTS_DIR=_vei_out/gpt5_llmtest VEI_SEED=42042 vei-llm-test --model gpt-5 --max-steps 32`
-- Score extract:
-  ```json
-  {
-    "success": false,
-    "subgoals": {"citations": 1, "approval": 0, "email_sent": 1, "email_parsed": 0},
-    "costs": {"actions": 120, "time_ms": 309657},
-    "policy": {"warning_count": 0, "error_count": 0}
+### Latest Multi-Provider Evaluation (2025‑09‑30)
+
+**🏆 Leaderboard:** See `evals/multi_provider_20250930_000632/LEADERBOARD.md` for full details.
+
+**Winner: GPT-5 (OpenAI) - Perfect Score**
+```json
+{
+  "success": true,
+  "subgoals": {
+    "citations": 1,      // ✅ Found product specs
+    "approval": 1,       // ✅ Got Slack approval  
+    "email_sent": 1,     // ✅ Sent vendor email
+    "email_parsed": 1    // ✅ Parsed vendor response
+  },
+  "costs": {
+    "actions": 11,
+    "time_ms": 139654
+  },
+  "usage": {
+    "browser.open": 1,
+    "browser.click": 1,
+    "browser.read": 4,
+    "slack.send_message": 4,
+    "mail.compose": 1
   }
-  ```
-- What happened: GPT‑5 looped on `vei.observe` + `browser.read` and repeatedly issued `mail.compose` with a minimal body, but it never called `slack.send_message`, so no approval arrived. The vendor reply (`"VendorA quote: $1006, ETA: 5 days."`) did land, but our current scoring regex looks for “price/total”, so that variant did not flip `email_parsed`. Environment plumbing, drift jobs, and tool registry all executed as expected; this is a model-planning miss.
+}
+```
+
+**Models Tested:**
+1. **gpt-5** (OpenAI) - ✅ 100% success (11/12 actions, all 4 subgoals)
+2. **gpt-5-codex** (OpenAI) - ⚠️ Partial (6/12 actions, 2/4 subgoals)
+3. **claude-sonnet-4-5** (Anthropic) - ⚠️ Partial (4/12 actions, 1/4 subgoals)
+4. **x-ai/grok-4** (OpenRouter) - ⚠️ Early failure (3/12 actions)
+5. **models/gemini-2.5-flash** (Google) - ⚠️ Early failure (3/12 actions)
+
+Run your own multi-provider eval:
+```bash
+./run_multi_provider_eval.sh
+```
 
 Notes on model behavior and failure modes
 - **Empty/observe plans**: If the model outputs `{}` or explicitly chooses `vei.observe`, no tool call is executed and no `trace.jsonl` entry is produced. This is not a transport failure, but the episode will not reach success and scoring will return `success: false`.
@@ -303,22 +350,42 @@ Troubleshooting
 
 ## Use Other LLMs
 
-There are two simple paths:
+**Built-in Provider Support:**
 
-1) OpenAI‑compatible gateway (Responses API)
+VEI includes native support for multiple LLM providers:
 
-- Requirements: your gateway must expose OpenAI’s Responses API at `/v1/responses`.
-- Configure:
-  - `OPENAI_BASE_URL=https://your-gateway/v1`
-  - `OPENAI_API_KEY=...`
-- Run with any model id your gateway supports:
+1) **OpenAI** (gpt-5, gpt-5-codex)
 ```bash
-VEI_ARTIFACTS_DIR=_vei_out/llmtest \
-vei-llm-test --model your-model --max-steps 32 --transport stdio
+export OPENAI_API_KEY=sk-...
+vei-llm-test --model gpt-5 --provider openai --max-steps 12
 ```
-- Notes: the planner first requests `response_format={type: json_schema}`; if unsupported, it retries without it and still expects a JSON object `{"tool":..., "args":{}}`.
 
-2) Bring‑your‑own planner (Anthropic or any SDK)
+2) **Anthropic** (claude-sonnet-4-5, claude-opus-4-1)
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+vei-llm-test --model claude-sonnet-4-5 --provider anthropic --max-steps 12
+```
+
+3) **Google** (gemini-2.5-flash, gemini-2.0-flash)
+```bash
+export GOOGLE_API_KEY=...  # or GEMINI_API_KEY
+vei-llm-test --model models/gemini-2.5-flash --provider google --max-steps 12
+```
+
+4) **OpenRouter** (grok-4, and 200+ other models)
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+vei-llm-test --model x-ai/grok-4 --provider openrouter --max-steps 12
+```
+
+**Custom Gateway (OpenAI-compatible):**
+
+For other providers, use an OpenAI-compatible gateway:
+- Requirements: Must expose `/v1/chat/completions` or `/v1/responses`
+- Configure: `OPENAI_BASE_URL=https://your-gateway/v1`
+- Run: `vei-llm-test --model your-model --max-steps 32`
+
+**Bring‑your‑own planner**
 
 - Keep VEI as a pure MCP server and drive it with your own loop:
   1. Start stdio server: `python -m vei.router` (or use SSE).

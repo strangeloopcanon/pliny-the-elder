@@ -1,0 +1,6 @@
+Model,Provider,Success,Actions,Citations,Approval,EmailSent,EmailParsed,Time_ms,Status
+gpt-5,OpenAI,TRUE,11,1,1,1,1,139654,PERFECT
+gpt-5-codex,OpenAI,FALSE,6,1,1,0,0,-,Partial
+claude-sonnet-4-5,Anthropic,FALSE,4,1,0,0,0,-,Partial
+x-ai/grok-4,OpenRouter,FALSE,3,0,0,0,0,-,Timeout
+models/gemini-2.5-flash,Google,FALSE,3,0,0,0,0,-,Failed

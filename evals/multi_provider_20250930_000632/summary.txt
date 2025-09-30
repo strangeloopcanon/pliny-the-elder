@@ -1,0 +1,22 @@
+Multi-Provider Eval Summary
+Generated: Tue Sep 30 00:11:05 PDT 2025
+Task: Research MacroBook Pro 16 specs from vweb.local/pdp/macrobook-pro-16, get Slack approval with budget < $3200, email vendor sales@macrocompute.example for price and ETA.
+
+Results:
+
+openai/gpt-5:
+  Success: true
+  Actions: 11
+  Subgoals: citations=1 approval=1 email_sent=1 email_parsed=1
+
+openai/gpt-5-codex:
+  Status: Failed or no score generated
+
+openrouter/x-ai/grok-4:
+  Status: Failed or no score generated
+
+anthropic/claude-sonnet-4-5:
+  Status: Failed or no score generated
+
+google/models/gemini-2.5-flash:
+  Status: Failed or no score generated

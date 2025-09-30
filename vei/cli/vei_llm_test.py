@@ -12,8 +12,8 @@ import typer
 from dotenv import load_dotenv
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from openai import AsyncOpenAI
 from ._llm_loop import extract_plan
+from vei.llm.providers import plan_once, auto_provider_for_model
 
 
 def _normalize_result(res: object) -> dict:
@@ -52,8 +52,15 @@ app = typer.Typer(add_completion=False)
 
 
 SYSTEM_PROMPT = (
-    "You are an MCP agent interacting with the VEI environment. "
-    "Call 'vei.observe {}' whenever you need to inspect the current state—it is often a starting point. "
+    "You are an MCP agent operating in a synthetic enterprise environment with deterministic tool twins. "
+    "Environment summary: Browser pages contain product info for citations; Slack approvals must include a budget amount and (ideally) a link; emailing a vendor via mail.compose triggers a vendor reply containing price and ETA; time advances via deterministic steps and vei.tick. "
+    "Scoring emphasizes: final task success (parsed vendor email with price+ETA), subgoals (browser.read for citation, Slack approval, outbound email), and efficiency (fewer steps). "
+    "Planner rules: one tool per step. Start with a single vei.observe to inspect state. AFTER THAT, you MUST select a non-observe action that progresses the goal. Do not return vei.observe twice in a row. Prefer concrete actions (browser.read, slack.send_message with budget+URL, mail.compose, mail.list/open, vei.tick). "
+    "Examples (JSON only): "
+    "Step 1 → {\"tool\": \"browser.read\", \"args\": {}} "
+    "Step 2 → {\"tool\": \"slack.send_message\", \"args\": {\"channel\": \"#procurement\", \"text\": \"Budget $3200. Link: https://vweb.local/pdp/macrobook-pro-16\"}} "
+    "Step 3 → {\"tool\": \"mail.compose\", \"args\": {\"to\": \"sales@macrocompute.example\", \"subj\": \"Quote request\", \"body_text\": \"Please send latest price and ETA.\"}} "
+    "Step 4 → {\"tool\": \"vei.tick\", \"args\": {\"dt_ms\": 20000}} "
     "Always reply with a single JSON object of the form {\"tool\": string, \"args\": object}."
 )
 
@@ -66,8 +73,13 @@ async def run_episode(
     model: str,
     sse_url: str,  # kept for signature compatibility; ignored in stdio mode
     max_steps: int = 12,
+    provider: str | None = None,
+    engine: str | None = None,  # reserved for future (simonw/llm) path
     openai_base_url: str | None = None,
     openai_api_key: str | None = None,
+    anthropic_api_key: str | None = None,
+    google_api_key: str | None = None,
+    openrouter_api_key: str | None = None,
     task: str | None = None,
     dataset_path: str | None = None,
     artifacts_dir: str | None = None,
@@ -86,30 +98,66 @@ async def run_episode(
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
+            # Enumerate full tool catalog so the model can "see" the environment
+            try:
+                tools_info = await session.list_tools()
+                tool_names = sorted({t.name for t in tools_info.tools})  # type: ignore[attr-defined]
+            except Exception:
+                tool_names = sorted(
+                    {
+                        "vei.observe",
+                        "vei.tick",
+                        "vei.help",
+                        "browser.read",
+                        "browser.find",
+                        "browser.open",
+                        "browser.click",
+                        "browser.back",
+                        "slack.send_message",
+                        "mail.compose",
+                        "mail.list",
+                        "mail.open",
+                        "mail.reply",
+                    }
+                )
 
-            # OpenAI Responses API for gpt-5 family; no temperature parameter
-            client = AsyncOpenAI(
-                base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
-                api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
-            )
             base_prompt = SYSTEM_PROMPT
             if task:
                 base_prompt += f"\nTask: {task}"
             transcript: list[dict] = []
             history: list[str] = []
 
+            # One-time catalog blurb and basic arg hints for common tools to reduce ambiguity
+            catalog_text = "\n".join(f"- {n}" for n in tool_names)
+            common_hints: dict[str, dict] = {
+                "browser.read": {},
+                "browser.find": {"query": "str", "top_k": "int?"},
+                "browser.click": {"node_id": "from observation.action_menu"},
+                "browser.open": {"url": "https://vweb.local/..."},
+                "vei.tick": {"dt_ms": 20000},
+                "slack.send_message": {
+                    "channel": "#procurement",
+                    "text": "Budget $3200. Link: https://vweb.local/pdp/macrobook-pro-16",
+                },
+                "mail.compose": {
+                    "to": "sales@macrocompute.example",
+                    "subj": "Quote request",
+                    "body_text": "Please send latest price and ETA.",
+                },
+                "mail.list": {},
+                "mail.open": {"id": "m1"},
+                "mail.reply": {"id": "m1", "body_text": "Thanks; confirming price and ETA."},
+            }
+            hints_lines = [f"- {k} {json.dumps(v)}" for k, v in common_hints.items() if k in tool_names]
+            hints_text = "\n".join(hints_lines)
+
+            prev_tool: str | None = None
             for step in range(max_steps):
                 obs_raw = await call_mcp_tool(session, "vei.observe", {})
                 obs = _normalize_result(obs_raw)
                 transcript.append({"observation": obs})
                 history.append(f"observation {step}: {json.dumps(obs)}")
-                menu = obs.get("action_menu", [])
-                menu_tools = {"vei.observe", "vei.tick"}
-                for item in menu:
-                    tool_name = item.get("tool")
-                    if tool_name:
-                        menu_tools.add(str(tool_name))
-                # Dynamic JSON schema based on observed affordances
+                # Open schema (no gating). We present the full tool catalog in the prompt instead of enumerating here.
                 plan_schema = {
                     "name": "vei.plan.schema",
                     "schema": {
@@ -117,64 +165,47 @@ async def run_episode(
                         "additionalProperties": False,
                         "required": ["tool", "args"],
                         "properties": {
-                            "tool": {"type": "string", "enum": sorted(menu_tools)},
+                            "tool": {"type": "string"},
                             "args": {"type": "object"},
                         },
                     },
                 }
                 context_block = "\n".join(history[-6:])
-                user = f"Observation:\n{json.dumps(obs)}"
+                user = (
+                    ("Goal:\n" + (task or "Complete procurement with citations, approval, and vendor email."))
+                    + "\n\nTools available (you may use any):\n" + catalog_text
+                    + ("\n\nCommon tool arg hints:\n" + hints_text if hints_text else "")
+                    + "\n\nObservation:\n" + json.dumps(obs)
+                    + "\n\nConsidering this, what is the single next task you should do to accomplish the goal? "
+                      "Choose exactly one tool and args that best advances the goal. "
+                      "Do not choose 'vei.observe' again unless new information appeared or you must change focus."
+                )
                 if context_block:
                     user = f"Context:\n{context_block}\n\n{user}"
-                # Responses API call; enforce JSON object output
-                # Try with a JSON schema; fall back if unsupported
+                # Call selected provider to get plan (JSON with {tool, args})
+                eff_provider = auto_provider_for_model(model, (provider or "").strip().lower() or None)
+                plan: dict
+                plan_error: str | None = None
                 try:
-                    resp = await client.responses.create(
+                    plan = await plan_once(
+                        provider=eff_provider,
                         model=model,
-                        input=f"{base_prompt}\n\n{user}",
-                        response_format={
-                            "type": "json_schema",
-                            "json_schema": plan_schema,
-                        },
+                        system=base_prompt,
+                        user=user,
+                        plan_schema=plan_schema,
+                        timeout_s=30,
+                        openai_base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
+                        openai_api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
+                        anthropic_api_key=anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"),
+                        google_api_key=google_api_key or os.environ.get("GOOGLE_API_KEY"),
+                        openrouter_api_key=openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
                     )
-                except Exception:
-                    resp = await client.responses.create(
-                        model=model,
-                        input=f"{base_prompt}\n\n{user}",
-                    )
-                raw = getattr(resp, "output_text", None)
-                if not raw:
-                    # Fallback traversal of SDK response
-                    try:
-                        out = getattr(resp, "output", [])
-                        if out and hasattr(out[0], "content"):
-                            cnt = out[0].content
-                            if cnt and hasattr(cnt[0], "text"):
-                                raw = cnt[0].text
-                    except Exception:
-                        raw = "{}"
-                if not raw:
-                    raw = "{}"
-                plan = extract_plan(raw, default_tool="vei.observe")
+                except Exception as e:
+                    plan_error = f"Provider error: {type(e).__name__}: {str(e)}"
+                    transcript.append({"plan_error": plan_error})
+                    raise  # FAIL FAST - no masking
                 tool = str(plan.get("tool", "vei.observe"))
                 args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
-                if tool not in menu_tools:
-                    # One-shot retry with schema hint
-                    try:
-                        resp2 = await client.responses.create(
-                            model=model,
-                            input=f"{base_prompt}\n\n{user}",
-                            response_format={
-                                "type": "json_schema",
-                                "json_schema": plan_schema,
-                            },
-                        )
-                        raw2 = getattr(resp2, "output_text", None) or "{}"
-                        plan = extract_plan(raw2, default_tool="vei.observe")
-                        tool = str(plan.get("tool", "vei.observe"))
-                        args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
-                    except Exception:
-                        tool, args = "vei.observe", {}
                 action_record = {"tool": tool, "args": args}
                 if tool == "vei.observe":
                     res_raw = await call_mcp_tool(session, tool, args)
@@ -209,6 +240,7 @@ async def run_episode(
                             history.append(f"observation {step}.tick: {json.dumps(obs2b)}")
                         except Exception:
                             ...
+                prev_tool = tool
 
             return transcript
 
@@ -243,24 +275,45 @@ def _ensure_sse_available(sse_url: str, autostart: bool) -> None:
 
 @app.command()
 def run(
-    model: str = typer.Option("gpt-5", help="OpenAI model id (see latest-model guide)"),
+    model: str = typer.Option("gpt-5", help="Model id"),
+    provider: str = typer.Option("openai", help="Provider: openai|anthropic|google|openrouter|auto"),
+    engine: str = typer.Option("sdk", help="Backend engine: sdk (default). 'llm' reserved."),
     openai_base_url: str | None = typer.Option(None, help="Override OPENAI_BASE_URL for SDK (OpenAI-compatible)"),
     openai_api_key: str | None = typer.Option(None, help="Override OPENAI_API_KEY for SDK"),
+    anthropic_api_key: str | None = typer.Option(None, help="Override ANTHROPIC_API_KEY for SDK"),
+    google_api_key: str | None = typer.Option(None, help="Override GOOGLE_API_KEY for SDK"),
+    openrouter_api_key: str | None = typer.Option(None, help="Override OPENROUTER_API_KEY for SDK"),
     max_steps: int = typer.Option(12, help="Max tool steps"),
     task: str | None = typer.Option(None, help="High-level goal for the LLM (prefixed as 'Task: ...')"),
     dataset: Path | None = typer.Option(None, help="Optional dataset JSON to prime replay"),
     artifacts: Path | None = typer.Option(None, help="Optional artifacts directory for traces"),
 ) -> None:
     load_dotenv(override=True)
-    if not (openai_api_key or os.getenv("OPENAI_API_KEY")):
+    eff_provider = auto_provider_for_model(model, provider)
+    if eff_provider == "openai" and not (openai_api_key or os.getenv("OPENAI_API_KEY")):
         raise typer.BadParameter("OPENAI_API_KEY not set (provide --openai-api-key or put it in .env)")
+    if eff_provider == "anthropic" and not (anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")):
+        raise typer.BadParameter("ANTHROPIC_API_KEY not set (provide --anthropic-api-key or put it in .env)")
+    if eff_provider == "google" and not (
+        google_api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    ):
+        raise typer.BadParameter(
+            "Google API key not set (provide --google-api-key or set GOOGLE_API_KEY/GEMINI_API_KEY in .env)"
+        )
+    if eff_provider == "openrouter" and not (openrouter_api_key or os.getenv("OPENROUTER_API_KEY")):
+        raise typer.BadParameter("OPENROUTER_API_KEY not set (provide --openrouter-api-key or put it in .env)")
     transcript = asyncio.run(
         run_episode(
             model=model,
             sse_url="",  # unused in stdio mode
             max_steps=max_steps,
+            provider=provider,
+            engine=engine,
             openai_base_url=openai_base_url,
             openai_api_key=openai_api_key,
+            anthropic_api_key=anthropic_api_key,
+            google_api_key=google_api_key,
+            openrouter_api_key=openrouter_api_key,
             task=task,
             dataset_path=str(dataset) if dataset else None,
             artifacts_dir=str(artifacts) if artifacts else None,
