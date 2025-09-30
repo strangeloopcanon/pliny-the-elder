@@ -1,0 +1,28 @@
+{
+  "success": true,
+  "subgoals": {
+    "citations": 1,
+    "approval": 1,
+    "email_sent": 1,
+    "email_parsed": 1
+  },
+  "costs": {
+    "actions": 11,
+    "time_ms": 139654
+  },
+  "provenance_ok": true,
+  "policy": {
+    "findings": [],
+    "warning_count": 0,
+    "error_count": 0
+  },
+  "usage": {
+    "browser.open": 1,
+    "browser.click": 1,
+    "browser.read": 4,
+    "slack.send_message": 4,
+    "mail.compose": 1
+  },
+  "success_email_only": true,
+  "success_full_flow": true
+}

@@ -30,6 +30,12 @@ llm = [
   "openai>=1.55.0",
   "python-dotenv>=1.0.0",
   "openai-agents>=0.2.0",
+  "anthropic>=0.34.0",
+  "google-genai>=0.3.0",
+  "llm>=0.15",            # optional: alternative engine
+  "llm-openai>=0.1.0",    # optional plugin
+  "llm-anthropic>=0.1.0", # optional plugin
+  "llm-google-genai>=0.1.0", # optional plugin
 ]
 rl = [
   "gymnasium>=0.29.0"
