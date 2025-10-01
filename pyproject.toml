@@ -58,6 +58,8 @@ vei-pack = "vei.cli.vei_pack:app"
 vei-rollout = "vei.cli.vei_rollout:app"
 vei-train = "vei.cli.vei_train:app"
 vei-eval = "vei.cli.vei_eval:app"
+vei-eval-frontier = "vei.cli.vei_eval_frontier:app"
+vei-report = "vei.cli.vei_report:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
