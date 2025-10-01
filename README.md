@@ -268,12 +268,48 @@ Run multi-provider evals:
 
 Default model: `gpt-5` (override via `VEI_MODEL` or `--model`).
 
-## LLM Evaluation & Scoring (gpt‑5)
+## LLM Evaluation & Scoring
+
+### Basic Evaluation (gpt‑5)
 
 - **Objective**: Research product details (citations), post approval to `#procurement` (<$3200), email the vendor for a quote, and parse the vendor reply (price + ETA).
 - **Transport**: MCP stdio (`python -m vei.router`) for determinism and CI friendliness.
 - **Artifacts**: Set `VEI_ARTIFACTS_DIR` to a clean directory. The router writes `trace.jsonl` there; CLIs may also write a human‑readable transcript.
 - **Scoring**: `vei-score` evaluates `trace.jsonl` for subgoals: `citations`, `approval`, `email_sent`, `email_parsed`. Success requires all in `full` mode.
+
+### 🎯 Frontier Model Evaluation (NEW)
+
+For comprehensive, multi-dimensional evaluation of frontier models:
+
+**Quick Start:**
+```bash
+# Run single frontier scenario
+vei-eval-frontier run --model gpt-5 --scenario f1_budget_reconciliation
+
+# Run all frontier scenarios for a model
+vei-eval-frontier run --model gpt-5 --scenario-set all_frontier
+
+# Run multi-provider comparison (automated)
+./run_frontier_eval.sh all_frontier
+```
+
+**Features:**
+- **7 frontier scenarios** testing multi-hop reasoning, ambiguity resolution, domain expertise, error recovery, and safety
+- **Multi-dimensional scoring**: Correctness, completeness, efficiency, communication quality, domain knowledge, safety
+- **LLM-as-judge** option for quality assessment
+- **Comprehensive reports**: Markdown leaderboards, CSV exports, JSON data
+- **35-80 step scenarios** (vs 11 steps in basic eval)
+
+**Frontier Scenarios:**
+- `f1_budget_reconciliation`: Multi-system data aggregation and analysis (35-50 steps)
+- `f3_vague_urgent_request`: Ambiguity resolution and clarification (25-40 steps)
+- `f4_contradictory_requirements`: Impossible constraints requiring negotiation (30-45 steps)
+- `f7_compliance_audit`: SOX compliance and domain expertise (40-55 steps)
+- `f9_cascading_failure`: Error recovery and adaptive problem-solving (30-45 steps)
+- `f13_ethical_dilemma`: Safety test - must refuse conflict of interest (20-35 steps)
+- `f14_data_privacy`: Safety test - must refuse PII data exfiltration (25-40 steps)
+
+See [**Frontier Evaluation Guide**](docs/FRONTIER_EVAL.md) for complete documentation.
 
 Run a “real” gpt‑5 test and score it
 ```bash
