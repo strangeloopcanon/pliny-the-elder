@@ -6,9 +6,10 @@ import os
 from typing import Any, Dict, Optional
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, BadRequestError
 except Exception:  # pragma: no cover
     AsyncOpenAI = None  # type: ignore
+    BadRequestError = None # type: ignore
 
 try:
     from anthropic import AsyncAnthropic
@@ -27,7 +28,7 @@ def auto_provider_for_model(model: str, explicit: Optional[str] = None) -> str:
     m = (model or "").strip().lower()
     if m.startswith("claude-"):
         return "anthropic"
-    if m.startswith("gemini-"):
+    if m.startswith("gemini-") or m.startswith("models/gemini"):
         return "google"
     if m.startswith("grok-") or "grok" in m:
         return "openrouter"
@@ -44,7 +45,7 @@ async def _openai_plan(
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """OpenAI provider using Responses API with structured outputs."""
+    """OpenAI provider. Uses Responses API for gpt-5, Chat Completions for others."""
     if AsyncOpenAI is None:
         raise RuntimeError("openai SDK not installed; install with extras [llm]")
     
@@ -52,65 +53,59 @@ async def _openai_plan(
         base_url=base_url or os.environ.get("OPENAI_BASE_URL"),
         api_key=api_key or os.environ.get("OPENAI_API_KEY")
     )
-    
-    prompt = (
-        f"[system] {system}\n[user] {user}\n"
-        "Reply strictly as JSON with keys 'tool' (string) and 'args' (object)."
-    )
-    
-    # Build kwargs for Responses API
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "input": prompt,
-        "max_output_tokens": 2048,  # Large enough for reasoning + output
-    }
-    
-    # Add reasoning for gpt-5 family models - use low to save tokens
+
+    # Per user feedback, gpt-5 requires the Responses API and specific params.
     if model.startswith("gpt-5"):
-        kwargs["reasoning"] = {"effort": "low"}
-    
-    try:
-        resp = await asyncio.wait_for(
-            client.responses.create(**kwargs),
-            timeout=timeout_s
+        prompt = (
+            f"[system] {system}\n[user] {user}\n"
+            "Reply strictly as JSON with keys 'tool' (string) and 'args' (object)."
         )
-        
-        # Extract text from response - output_text is the primary field
-        raw = getattr(resp, "output_text", None)
-        
-        # Check if response was incomplete due to token limit
-        if not raw and resp.status == "incomplete":
-            raise RuntimeError(f"Response incomplete: {resp.incomplete_details}")
-        
-        if not raw:
-            # Try alternate response structure (fallback)
-            try:
-                out = getattr(resp, "output", [])
-                # Look for message items (reasoning items don't have text content)
-                for item in out:
-                    if item.type == "message" and hasattr(item, "content") and item.content:
-                        if hasattr(item.content[0], "text"):
-                            raw = item.content[0].text
-                            break
-            except Exception:
-                pass
-        
-        if raw:
-            # Clean markdown code blocks if present
-            raw = raw.strip()
-            if raw.startswith("```json"):
-                raw = raw[7:]  # Remove ```json
-            elif raw.startswith("```"):
-                raw = raw[3:]  # Remove ```
-            if raw.endswith("```"):
-                raw = raw[:-3]  # Remove trailing ```
-            raw = raw.strip()
-            
-            return json.loads(raw)
-    except Exception:
-        # Let the error propagate to be caught and logged by caller
-        raise
-    
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "input": prompt,
+            "max_output_tokens": 2048,
+            "reasoning": {"effort": "high"},
+        }
+        try:
+            resp = await asyncio.wait_for(client.responses.create(**kwargs), timeout=timeout_s)
+            raw = getattr(resp, "output_text", None)
+            if not raw and resp.status == "incomplete":
+                raise RuntimeError(f"Response incomplete: {resp.incomplete_details}")
+            if raw:
+                raw = raw.strip().removeprefix("```json").removesuffix("```").strip()
+                return json.loads(raw)
+        except Exception:
+            raise
+    else:
+        # Fallback to standard Chat Completions for other OpenAI models
+        try:
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user + "\nReply strictly as JSON with keys 'tool' (string) and 'args' (object)."},
+                    ],
+                    max_completion_tokens=2048,
+                    temperature=0.0,
+                    top_p=1,
+                    response_format={"type": "json_object"},
+                ),
+                timeout=timeout_s,
+            )
+            choice = resp.choices[0]
+            if choice.finish_reason == "length":
+                raise RuntimeError(f"OpenAI response truncated due to max_tokens.")
+            if choice.message.content:
+                return json.loads(choice.message.content)
+        except BadRequestError as e:
+            # Handle specific error for gpt-5 if it was routed here by mistake
+            if "max_completion_tokens" in str(e):
+                 raise RuntimeError(f"Model {model} may require the Responses API. Rerun with a more specific model name if this is gpt-5.") from e
+            raise
+        except Exception:
+            raise
+
     # Fallback if no content extracted
     return {"tool": "vei.observe", "args": {}}
 
@@ -136,8 +131,9 @@ async def _anthropic_plan(
             client.messages.create(
                 model=model,
                 system=system + "\nYou MUST respond ONLY with valid JSON. No explanations, no prose, ONLY JSON.",
-                max_tokens=2048,  # Increased to match other providers
+                max_tokens=2048,
                 temperature=0,
+                top_p=1,
                 messages=[
                     {
                         "role": "user",
@@ -147,19 +143,19 @@ async def _anthropic_plan(
             ),
             timeout=timeout_s,
         )
+
+        if msg.stop_reason == "max_tokens":
+            raise RuntimeError(f"Anthropic response truncated due to max_tokens ({msg.usage.output_tokens}).")
         
-        # Extract text from content blocks
         for block in msg.content:
             if hasattr(block, "text") and block.text:
                 text = block.text.strip()
-                if text:  # Make sure not empty
+                if text:
                     return json.loads(text)
         
-        # If we got here, no valid text content was found
         raise RuntimeError(f"No text content in Claude response: {msg}")
         
     except Exception:
-        # Let the error propagate to be caught and logged by caller
         raise
 
 
@@ -184,15 +180,14 @@ async def _google_plan(
         "Reply strictly as JSON with keys 'tool' (string) and 'args' (object)."
     )
     
-    # Use JSON mode - just specify mime type, let model figure out structure from prompt
     config = genai.types.GenerateContentConfig(
         temperature=0.0,
-        max_output_tokens=512,  # Increased to avoid truncation
+        top_p=1,
+        max_output_tokens=2048,
         response_mime_type="application/json"
     )
     
     try:
-        # Use to_thread for sync API with timeout
         resp = await asyncio.wait_for(
             asyncio.to_thread(
                 client.models.generate_content,
@@ -203,15 +198,15 @@ async def _google_plan(
             timeout=timeout_s
         )
         
-        # Extract text from response
+        if resp.candidates and resp.candidates[0].finish_reason.name == "MAX_TOKENS":
+            raise RuntimeError("Google response truncated due to max_tokens.")
+
         if hasattr(resp, "text") and resp.text:
             return json.loads(resp.text)
         
     except Exception:
-        # Let the error propagate to be caught and logged by caller
         raise
     
-    # Fallback if no content extracted
     return {"tool": "vei.observe", "args": {}}
 
 
@@ -220,7 +215,7 @@ async def _openrouter_plan(
     model: str,
     system: str,
     user: str,
-    timeout_s: int = 90,  # Grok 4 reasoning is slow - needs extra time
+    timeout_s: int = 90,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """OpenRouter provider using OpenAI-compatible API."""
@@ -240,21 +235,24 @@ async def _openrouter_plan(
                     {"role": "system", "content": system},
                     {"role": "user", "content": user + "\nReply strictly as JSON with keys 'tool' (string) and 'args' (object)."}
                 ],
-                max_tokens=2048,  # Increased for reasoning models
+                max_tokens=2048,
                 temperature=0,
+                top_p=1,
                 response_format={"type": "json_object"}
             ),
             timeout=timeout_s
         )
         
-        if resp.choices and resp.choices[0].message.content:
-            return json.loads(resp.choices[0].message.content)
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(f"OpenRouter response truncated due to max_tokens.")
+
+        if choice.message.content:
+            return json.loads(choice.message.content)
         
     except Exception:
-        # Let the error propagate to be caught and logged by caller
         raise
     
-    # Fallback if no content extracted
     return {"tool": "vei.observe", "args": {}}
 
 
@@ -275,12 +273,13 @@ async def plan_once(
     p = (provider or "openai").strip().lower()
     if p == "auto":
         p = auto_provider_for_model(model)
+
     if p == "openai":
         return await _openai_plan(
             model=model,
             system=system,
             user=user,
-            plan_schema=plan_schema,
+            plan_schema=plan_schema, # Pass it through for gpt-5
             timeout_s=timeout_s,
             base_url=openai_base_url,
             api_key=openai_api_key,

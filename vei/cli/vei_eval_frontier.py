@@ -26,6 +26,7 @@ app = typer.Typer(name="vei-eval-frontier", help="Run frontier model evaluations
 FRONTIER_SCENARIO_SETS = {
     "all_frontier": [
         "f1_budget_reconciliation",
+        "f2_knowledge_qa",
         "f3_vague_urgent_request",
         "f4_contradictory_requirements",
         "f7_compliance_audit",
@@ -126,7 +127,6 @@ def run_frontier_eval(
             "--provider", provider,
             "--max-steps", str(max_steps),
             "--artifacts", str(scenario_dir),
-            "--seed", str(seed),
         ]
         
         # Set environment variable for scenario

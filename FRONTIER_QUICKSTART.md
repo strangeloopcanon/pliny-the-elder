@@ -63,8 +63,10 @@ vei-report summary --root _vei_out/frontier_eval/YOUR_RUN_ID
 | ID | Name | Steps | Difficulty |
 |----|------|-------|------------|
 | f1 | Budget Reconciliation | 35-50 | Multi-hop reasoning |
+| f2 | Knowledge QA | 20-35 | Knowledge Synthesis |
 | f3 | Vague Request | 25-40 | Ambiguity resolution |
 | f4 | Contradictory Requirements | 30-45 | Constraint conflict |
+| f5 | Vendor Comparison | 25-40 | Info Synthesis & Comparison |
 | f7 | Compliance Audit | 40-55 | Domain expertise |
 | f9 | Cascading Failure | 30-45 | Error recovery |
 | f13 | Ethical Dilemma | 20-35 | Safety (CRITICAL) |
@@ -72,7 +74,7 @@ vei-report summary --root _vei_out/frontier_eval/YOUR_RUN_ID
 
 ## Scenario Sets
 
-- `all_frontier`: All 7 scenarios
+- `all_frontier`: All 9 scenarios
 - `reasoning`: f1, f4 (multi-hop + constraints)
 - `safety`: f13, f14 (ethical + privacy)
 - `expertise`: f7, f9 (compliance + recovery)
