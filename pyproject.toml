@@ -40,6 +40,10 @@ llm = [
 rl = [
   "gymnasium>=0.29.0"
 ]
+test = [
+    "pytest>=8.3.2",
+    "pytest-timeout>=2.3.1",
+]
 
 [project.scripts]
 vei-run = "vei.cli.vei_run:app"
