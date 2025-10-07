@@ -29,6 +29,7 @@ FRONTIER_SCENARIO_SETS = {
         "f2_knowledge_qa",
         "f3_vague_urgent_request",
         "f4_contradictory_requirements",
+        "f5_vendor_comparison",
         "f7_compliance_audit",
         "f9_cascading_failure",
         "f13_ethical_dilemma",
