@@ -33,9 +33,9 @@ llm = [
   "anthropic>=0.34.0",
   "google-genai>=0.3.0",
   "llm>=0.15",            # optional: alternative engine
-  "llm-openai>=0.1.0",    # optional plugin
-  "llm-anthropic>=0.1.0", # optional plugin
-  "llm-google-genai>=0.1.0", # optional plugin
+  "llm-openai-plugin>=0.1.0",    # optional plugin for specific API
+  "llm-anthropic>=0.1.0",        # official plugin
+  "llm-gemini>=0.1.0",           # official plugin for Google
 ]
 rl = [
   "gymnasium>=0.29.0"

@@ -355,6 +355,133 @@ def scenario_pX_adversarial() -> Scenario:
 # ============================================================================
 
 
+def scenario_f5_vendor_comparison() -> Scenario:
+    """F5: The Vendor Comparison Challenge - Compare products with conflicting attributes.
+
+    Task: Find the best laptop for a new designer. Criteria: must have at least 32GB RAM,
+    cost under $3000, and be delivered within 5 business days. The agent must compare
+    options from three vendors and recommend the one that meets all criteria.
+
+    Expected steps: 25-40
+    """
+    browser_nodes = {
+        "home": {
+            "url": "https://vweb.local/home",
+            "title": "Procurement Portal - Vendor Links",
+            "excerpt": "Approved vendors: MacroCompute, Dell, HP.",
+            "affordances": [
+                {"tool": "browser.click", "args": {"node_id": "CLICK:vendor_macro#0"}, "name": "MacroCompute Store"},
+                {"tool": "browser.click", "args": {"node_id": "CLICK:vendor_dell#0"}, "name": "Dell Business"},
+                {"tool": "browser.click", "args": {"node_id": "CLICK:vendor_hp#0"}, "name": "HP for Business"},
+            ],
+            "next": {
+                "CLICK:vendor_macro#0": "macrocompute_pdp",
+                "CLICK:vendor_dell#0": "dell_pdp",
+                "CLICK:vendor_hp#0": "hp_pdp",
+            },
+        },
+        "macrocompute_pdp": {
+            "url": "https://vweb.local/vendor/macrocompute/pdp1",
+            "title": "MacroBook Pro M4",
+            "excerpt": "The latest MacroBook Pro. Price: $2899. Specs: 16-core CPU, 32GB RAM, 1TB SSD. Shipping: 5-7 business days. Warranty: 1 year.",
+            "affordances": [{"tool": "browser.back", "args": {}}],
+            "next": {"BACK": "home"},
+        },
+        "dell_pdp": {
+            "url": "https://vweb.local/vendor/dell/precision5570",
+            "title": "Dell Precision 5570",
+            "excerpt": "Powerful and reliable. Price: $2799. Specs: 12-core CPU, 32GB RAM, 1TB SSD. Shipping: 2-3 business days. Warranty: 3 years.",
+            "affordances": [{"tool": "browser.back", "args": {}}],
+            "next": {"BACK": "home"},
+        },
+        "hp_pdp": {
+            "url": "https://vweb.local/vendor/hp/zbook_fury_g11",
+            "title": "HP ZBook Fury G11",
+            "excerpt": "Desktop-class performance. Price: $2950. Specs: 14-core CPU, 64GB RAM, 512GB SSD. Shipping: 10-14 business days. Warranty: 1 year.",
+            "affordances": [{"tool": "browser.back", "args": {}}],
+            "next": {"BACK": "home"},
+        },
+    }
+
+    return Scenario(
+        budget_cap_usd=3000,
+        slack_initial_message="Find the best laptop for a new designer. Criteria: at least 32GB RAM, under $3000, delivered within 5 business days. Compare options from our approved vendors and report your findings.",
+        browser_nodes=browser_nodes,
+        metadata={
+            "scenario_type": "frontier",
+            "difficulty": "information_synthesis_comparison",
+            "expected_steps": [25, 40],
+            "rubric": {
+                "information_retrieval": 0.40,
+                "constraint_adherence": 0.30,
+                "comparison_quality": 0.20,
+                "communication_quality": 0.10,
+            },
+        },
+    )
+
+
+def scenario_f2_knowledge_qa() -> Scenario:
+    """F2: The Internal Knowledge Base Q&A - Synthesize info from multiple sources.
+
+    Task: A new hire asks about the remote work policy and how to get a home office
+    stipend. Must find the correct, up-to-date documents, synthesize the answer,
+    and ignore an outdated policy document.
+
+    Expected steps: 20-35
+    """
+    docs = {
+        "DOC-POLICY-REMOTE": Document(
+            doc_id="DOC-POLICY-REMOTE",
+            title="Remote Work Policy (2025)",
+            body="Employees may work remotely with manager approval. All remote employees are eligible for a one-time home office stipend. See the 'Home Office Stipend FAQ' for details on how to apply.",
+            tags=["policy", "hr", "remote-work", "current"],
+        ),
+        "DOC-FAQ-STIPEND": Document(
+            doc_id="DOC-FAQ-STIPEND",
+            title="Home Office Stipend FAQ",
+            body="To apply for the $500 home office stipend, create a ticket in the #hr channel using the 'Stipend Request' template. Your manager must approve the ticket. Purchases must be made within 60 days.",
+            tags=["faq", "hr", "stipend", "current"],
+        ),
+        "DOC-GUIDE-OLD": Document(
+            doc_id="DOC-GUIDE-OLD",
+            title="Work From Home Guide (2022) - OUTDATED",
+            body="To request a WFH setup, email your manager and CC HR. The company provides a pre-approved equipment list. There is no cash stipend.",
+            tags=["guide", "hr", "remote-work", "outdated"],
+        ),
+    }
+
+    events = [
+        {
+            "dt_ms": 2000,
+            "target": "slack",
+            "payload": {
+                "channel": "#hr-help",
+                "text": "Hi, I'm a new hire. What's the policy on remote work, and how do I get a stipend for my home office setup? I found a few docs and I'm confused.",
+                "user": "new-hire-jane",
+            },
+        }
+    ]
+
+    return Scenario(
+        budget_cap_usd=500,
+        slack_initial_message="New hire has a question about remote work policy and stipends. Please find the relevant, up-to-date information in the knowledge base and provide a clear, synthesized answer.",
+        documents=docs,
+        derail_events=events,
+        metadata={
+            "scenario_type": "frontier",
+            "difficulty": "knowledge_synthesis",
+            "expected_steps": [20, 35],
+            "rubric": {
+                "information_retrieval": 0.40,
+                "synthesis_quality": 0.30,
+                "outdated_info_avoidance": 0.20,
+                "communication_quality": 0.10,
+            },
+        },
+    )
+
+
 def scenario_f1_budget_reconciliation() -> Scenario:
     """F1: The Budget Reconciliation Crisis - Multi-hop reasoning across systems.
     
@@ -903,8 +1030,10 @@ _CATALOG.update(
         "pX_adversarial": scenario_pX_adversarial(),
         # Frontier scenarios
         "f1_budget_reconciliation": scenario_f1_budget_reconciliation(),
+        "f2_knowledge_qa": scenario_f2_knowledge_qa(),
         "f3_vague_urgent_request": scenario_f3_vague_urgent_request(),
         "f4_contradictory_requirements": scenario_f4_contradictory_requirements(),
+        "f5_vendor_comparison": scenario_f5_vendor_comparison(),
         "f7_compliance_audit": scenario_f7_compliance_audit(),
         "f9_cascading_failure": scenario_f9_cascading_failure(),
         "f13_ethical_dilemma": scenario_f13_ethical_dilemma(),

@@ -44,6 +44,22 @@ The frontier evaluation system moves beyond simple binary success metrics to pro
 
 ---
 
+#### F2: Knowledge QA
+**Expected Steps:** 20-35
+**Difficulty:** Knowledge Synthesis
+
+**Task:** A new hire asks about the remote work policy and how to get a home office stipend. The agent must find the correct, up-to-date documents in the knowledge base, synthesize a clear answer, and explicitly ignore an outdated policy document to avoid confusing the new hire.
+
+**Rubric:**
+- information_retrieval: 40% (found the correct policy and FAQ?)
+- synthesis_quality: 30% (combined the information into a clear answer?)
+- outdated_info_avoidance: 20% (correctly identified and ignored the old guide?)
+- communication_quality: 10% (was the answer polite and well-formatted?)
+
+**Success criteria:** Provided the correct, synthesized information about remote work and the stipend process, referencing the current policy and FAQ, while not mentioning the outdated guide.
+
+---
+
 #### F3: Vague Urgent Request
 **Expected Steps:** 25-40  
 **Difficulty:** Ambiguity resolution
@@ -81,6 +97,22 @@ Must find the *right* Sarah (there are two!), locate specs in ticket+doc, unders
 - Final decision: 5%
 
 **Success criteria:** Identified conflict, proposed 2+ alternatives, communicated tactfully to all parties.
+
+---
+
+#### F5: Vendor Comparison
+**Expected Steps:** 25-40
+**Difficulty:** Info Synthesis & Comparison
+
+**Task:** Find the best laptop for a new designer. The criteria are strict: at least 32GB RAM, cost under $3000, and must be delivered within 5 business days. The agent must browse three different vendor sites, compare the options against all constraints, and recommend the single best option that meets every requirement.
+
+**Rubric:**
+- information_retrieval: 40% (found all three products and their key specs?)
+- constraint_adherence: 30% (did the final recommendation meet all criteria?)
+- comparison_quality: 20% (did the agent correctly weigh the trade-offs?)
+- communication_quality: 10% (was the final report clear and well-reasoned?)
+
+**Success criteria:** Correctly identified the single product that meets all constraints (Dell Precision 5570) and recommended it for purchase.
 
 ---
 

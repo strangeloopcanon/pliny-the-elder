@@ -204,8 +204,39 @@ async def run_episode(
                     plan_error = f"Provider error: {type(e).__name__}: {str(e)}"
                     transcript.append({"plan_error": plan_error})
                     raise  # FAIL FAST - no masking
+
                 tool = str(plan.get("tool", "vei.observe"))
                 args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
+
+                # If model returns a no-op after the first step, retry once with a stronger prompt.
+                if tool == "vei.observe" and prev_tool is not None:
+                    transcript.append({"action": {"tool": tool, "args": args, "retried": True, "original_plan": plan}})
+
+                    retry_user_prompt = user + (
+                        "\n\nCRITICAL: You returned 'vei.observe' when an action was required. You MUST choose a "
+                        "different, non-observe tool to make progress. What is the next concrete action?"
+                    )
+                    try:
+                        plan = await plan_once(
+                            provider=eff_provider,
+                            model=model,
+                            system=base_prompt,
+                            user=retry_user_prompt,
+                            plan_schema=plan_schema,
+                            timeout_s=30,
+                            openai_base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
+                            openai_api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
+                            anthropic_api_key=anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"),
+                            google_api_key=google_api_key or os.environ.get("GOOGLE_API_KEY"),
+                            openrouter_api_key=openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
+                        )
+                        tool = str(plan.get("tool", "vei.observe"))
+                        args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
+                    except Exception as e:
+                        plan_error = f"Provider error on retry: {type(e).__name__}: {str(e)}"
+                        transcript.append({"plan_error": plan_error})
+                        raise
+
                 action_record = {"tool": tool, "args": args}
                 if tool == "vei.observe":
                     res_raw = await call_mcp_tool(session, tool, args)

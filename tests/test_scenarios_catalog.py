@@ -33,3 +33,50 @@ def test_multi_channel_scenario_has_docs_and_tickets():
 
     tickets = r.call_and_step("tickets.list", {})
     assert tickets and tickets[0]["ticket_id"] == "TCK-42"
+
+
+def test_f2_knowledge_qa_scenario_loads_correctly():
+    """Verify the F2 scenario loads with correct documents and events."""
+    scen = get_scenario("f2_knowledge_qa")
+
+    # Check that the necessary documents are defined
+    assert scen.documents, "Scenario should have documents"
+    assert "DOC-POLICY-REMOTE" in scen.documents
+    assert "DOC-FAQ-STIPEND" in scen.documents
+    assert "DOC-GUIDE-OLD" in scen.documents
+
+    # Check that the outdated document is marked as such
+    assert "OUTDATED" in scen.documents["DOC-GUIDE-OLD"].title
+
+    # Check for the initial event
+    assert scen.derail_events, "Scenario should have a derail event"
+    assert scen.derail_events[0]["payload"]["user"] == "new-hire-jane"
+
+    # Check that the router can be initialized and can list the docs
+    r = Router(seed=42, artifacts_dir=None, scenario=scen)
+    docs_list = r.call_and_step("docs.list", {})
+    assert len(docs_list) == 3
+    doc_titles = [doc["title"] for doc in docs_list]
+    assert "Remote Work Policy (2025)" in doc_titles
+    assert "Work From Home Guide (2022) - OUTDATED" in doc_titles
+
+
+def test_f5_vendor_comparison_scenario_loads_correctly():
+    """Verify the F5 scenario loads with correct browser nodes."""
+    scen = get_scenario("f5_vendor_comparison")
+
+    # Check that the browser nodes are defined
+    assert scen.browser_nodes, "Scenario should have browser_nodes"
+    assert "home" in scen.browser_nodes
+    assert "macrocompute_pdp" in scen.browser_nodes
+    assert "dell_pdp" in scen.browser_nodes
+    assert "hp_pdp" in scen.browser_nodes
+
+    # Check that the router can be initialized and can see the vendor links
+    r = Router(seed=42, artifacts_dir=None, scenario=scen)
+    obs = r.call_and_step("vei.observe", {})
+    affordances = obs.get("action_menu", [])
+    assert len(affordances) >= 3
+    vendor_links = [a.get("name") for a in affordances if a.get("tool") == "browser.click"]
+    assert "MacroCompute Store" in vendor_links
+    assert "Dell Business" in vendor_links
