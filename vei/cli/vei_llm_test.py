@@ -6,6 +6,8 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import Any, Dict, Tuple, List
+import re
 from urllib.parse import urlparse
 
 import typer
@@ -14,6 +16,111 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from ._llm_loop import extract_plan
 from vei.llm.providers import plan_once, auto_provider_for_model
+
+
+_CLAUDE_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _sanitize_tool_name(name: str, seen: set[str]) -> str:
+    alias = _CLAUDE_NAME_PATTERN.sub("_", name)
+    if not alias:
+        alias = "tool"
+    alias = alias[:64]
+    base = alias
+    suffix = 1
+    while alias in seen:
+        trimmed = base[: max(0, 63 - len(str(suffix)))]
+        alias = f"{trimmed}_{suffix}"
+        suffix += 1
+    seen.add(alias)
+    return alias
+
+
+PREFERRED_ANTHROPIC_TOOLS: List[str] = [
+    "vei.observe",
+    "vei.tick",
+    "browser.read",
+    "browser.open",
+    "browser.find",
+    "browser.click",
+    "browser.back",
+    "slack.send_message",
+    "slack.fetch_thread",
+    "mail.list",
+    "mail.open",
+    "mail.compose",
+    "docs.read",
+    "docs.search",
+    "tickets.list",
+    "tickets.get",
+]
+
+
+def _build_anthropic_tool_schemas(tools_info: object) -> Tuple[list[dict[str, Any]], Dict[str, str]]:
+    schemas: list[dict[str, Any]] = []
+    alias_map: Dict[str, str] = {}
+    seen_aliases: set[str] = set()
+    for tool in getattr(tools_info, "tools", []) or []:
+        name = getattr(tool, "name", None)
+        if not name:
+            continue
+        alias = _sanitize_tool_name(name, seen_aliases)
+        alias_map[alias] = name
+        description = getattr(tool, "description", "") or f"MCP tool {name}"
+        schema = None
+        for attr in ("input_schema", "inputSchema", "parameters", "schema"):
+            candidate = getattr(tool, attr, None)
+            if candidate is not None:
+                schema = candidate
+                break
+        if hasattr(schema, "model_dump"):
+            schema = schema.model_dump()
+        elif hasattr(schema, "dict"):
+            schema = schema.dict()  # type: ignore[attr-defined]
+        if isinstance(schema, str):
+            try:
+                schema = json.loads(schema)
+            except Exception:
+                schema = None
+        if not isinstance(schema, dict):
+            schema = {"type": "object", "properties": {}, "additionalProperties": True}
+        schemas.append({
+            "name": alias,
+            "description": description,
+            "input_schema": schema,
+        })
+    if len(schemas) > 16:
+        tool_names = sorted(alias_map.values())
+        tool_list_preview = ", ".join(tool_names[:24])
+        if len(tool_names) > 24:
+            tool_list_preview += ", ..."
+        schemas = [
+            {
+                "name": "vei_call",
+                "description": (
+                    "Bridge tool to invoke any MCP function. "
+                    "Set args.tool to one of: " + tool_list_preview + ". "
+                    "Provide args.args as the JSON argument object."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "tool": {
+                            "type": "string",
+                            "description": "Name of the MCP tool to invoke"
+                        },
+                        "args": {
+                            "type": "object",
+                            "additionalProperties": True,
+                            "description": "Arguments object for the selected tool"
+                        }
+                    },
+                    "required": ["tool", "args"],
+                },
+            }
+        ]
+        alias_map = {}
+    return schemas, alias_map
 
 
 def _normalize_result(res: object) -> dict:
@@ -99,9 +206,12 @@ async def run_episode(
         async with ClientSession(read, write) as session:
             await session.initialize()
             # Enumerate full tool catalog so the model can "see" the environment
+            anthropic_tool_schemas: list[dict[str, Any]] | None = None
+            anthropic_alias_map: Dict[str, str] | None = None
             try:
                 tools_info = await session.list_tools()
                 tool_names = sorted({t.name for t in tools_info.tools})  # type: ignore[attr-defined]
+                anthropic_tool_schemas, anthropic_alias_map = _build_anthropic_tool_schemas(tools_info)
             except Exception:
                 tool_names = sorted(
                     {
@@ -193,17 +303,24 @@ async def run_episode(
                         system=base_prompt,
                         user=user,
                         plan_schema=plan_schema,
-                        timeout_s=30,
+                        timeout_s=240,
                         openai_base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
                         openai_api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
                         anthropic_api_key=anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"),
                         google_api_key=google_api_key or os.environ.get("GOOGLE_API_KEY"),
                         openrouter_api_key=openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
+                        tool_schemas=anthropic_tool_schemas if eff_provider == "anthropic" else None,
+                        alias_map=anthropic_alias_map if eff_provider == "anthropic" else None,
                     )
                 except Exception as e:
                     plan_error = f"Provider error: {type(e).__name__}: {str(e)}"
                     transcript.append({"plan_error": plan_error})
                     raise  # FAIL FAST - no masking
+
+                if eff_provider == "anthropic" and anthropic_alias_map:
+                    tool_alias = plan.get("tool")
+                    if tool_alias in anthropic_alias_map:
+                        plan["tool"] = anthropic_alias_map[tool_alias]
 
                 tool = str(plan.get("tool", "vei.observe"))
                 args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
@@ -223,13 +340,19 @@ async def run_episode(
                             system=base_prompt,
                             user=retry_user_prompt,
                             plan_schema=plan_schema,
-                            timeout_s=30,
+                            timeout_s=240,
                             openai_base_url=openai_base_url or os.environ.get("OPENAI_BASE_URL"),
                             openai_api_key=openai_api_key or os.environ.get("OPENAI_API_KEY"),
                             anthropic_api_key=anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"),
                             google_api_key=google_api_key or os.environ.get("GOOGLE_API_KEY"),
                             openrouter_api_key=openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
+                            tool_schemas=anthropic_tool_schemas if eff_provider == "anthropic" else None,
+                            alias_map=anthropic_alias_map if eff_provider == "anthropic" else None,
                         )
+                        if eff_provider == "anthropic" and anthropic_alias_map:
+                            alias = plan.get("tool")
+                            if alias in anthropic_alias_map:
+                                plan["tool"] = anthropic_alias_map[alias]
                         tool = str(plan.get("tool", "vei.observe"))
                         args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
                     except Exception as e:

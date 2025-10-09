@@ -322,40 +322,25 @@ VEI_SEED=42042 vei-llm-test \
 vei-score --artifacts-dir _vei_out/gpt5_llmtest --success-mode full
 ```
 
-### Latest Multi-Provider Evaluation (2025‑09‑30)
+### Latest Multi-Provider Evaluation (2025‑10‑08 · multi_channel)
 
-**🏆 Leaderboard:** See `evals/multi_provider_20250930_000632/LEADERBOARD.md` for full details.
+**Summary** – All models were run in the multi-channel scenario (Slack, Mail, Docs, Tickets). Each exhausted the 40-step budget and failed to parse the vendor reply because of repetitive slack/mail loops. Use this run as a stress baseline for complex environments.
 
-**Winner: GPT-5 (OpenAI) - Perfect Score**
-```json
-{
-  "success": true,
-  "subgoals": {
-    "citations": 1,      // ✅ Found product specs
-    "approval": 1,       // ✅ Got Slack approval  
-    "email_sent": 1,     // ✅ Sent vendor email
-    "email_parsed": 1    // ✅ Parsed vendor response
-  },
-  "costs": {
-    "actions": 11,
-    "time_ms": 139654
-  },
-  "usage": {
-    "browser.open": 1,
-    "browser.click": 1,
-    "browser.read": 4,
-    "slack.send_message": 4,
-    "mail.compose": 1
-  }
-}
-```
+| Provider/Model | Success | Actions | Citations | Approval | Email Sent | Email Parsed | Key warnings |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenAI / gpt-5 | ✗ | 39 | 1 | 1 | 1 | 0 | `usage.repetition` (browser.read/slack/mail), `mail.outbound_volume` |
+| OpenAI / gpt-5-codex | ✗ | 39 | 1 | 1 | 0 | 0 | Stalled before vendor reply; browser/slack loops |
+| Anthropic / claude-sonnet-4-5 | ✗ | 39 | 1 | 1 | 1 | 0 | Used `vei_call` bridge, but repeated mail/slack prevented completion |
+| OpenRouter / x-ai_grok-4 | ✗ | 0 | 0 | 0 | 0 | 0 | Transport aborted before first action |
+| Google / models/gemini-2.5-flash | ✗ | 39 | 0 | 1 | 1 | 0 | Slack/mail repetition; no vendor parse |
 
-**Models Tested:**
-1. **gpt-5** (OpenAI) - ✅ 100% success (11/12 actions, all 4 subgoals)
-2. **gpt-5-codex** (OpenAI) - ⚠️ Partial (6/12 actions, 2/4 subgoals)
-3. **claude-sonnet-4-5** (Anthropic) - ⚠️ Partial (4/12 actions, 1/4 subgoals)
-4. **x-ai/grok-4** (OpenRouter) - ⚠️ Early failure (3/12 actions)
-5. **models/gemini-2.5-flash** (Google) - ⚠️ Early failure (3/12 actions)
+Artifacts: `_vei_out/gpt5_llmtest/multi_provider_20251008_181830/` (per-model `trace.jsonl`, `score.json`, `stderr.log`). `summary.txt` now mirrors `vei-score` warnings (`usage.repetition`, `mail.outbound_volume`, etc.) so you can evaluate efficiency even when a run technically “succeeds”. Token usage prints when providers return it; in this run all models reported `tokens=0`.
+
+> ℹ️ Anthropic’s Messages API accepts at most 16 tools and enforces `^[A-Za-z0-9_-]{1,64}$` names. We expose a single `vei_call` bridge so Claude can invoke any MCP tool by name (`{"tool": "docs.read", "args": {...}}`).
+
+### Previous Evaluation (2025‑09‑30 · procurement baseline)
+
+The original procurement-only leaderboard is still available at `evals/multi_provider_20250930_000632/LEADERBOARD.md` for comparison.
 
 Run your own multi-provider eval:
 ```bash

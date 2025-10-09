@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 from typing import Any
 
@@ -146,7 +144,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="slack.send_message", description="Send a Slack message")
-    def slack_send_message(channel: str, text: str, thread_ts: str | None = None) -> dict[str, Any]:
+    def slack_send_message(channel: str, text: str, thread_ts: str = None) -> dict[str, Any]:
         try:
             return R().call_and_step("slack.send_message", {"channel": channel, "text": text, "thread_ts": thread_ts})
         except MCPError as e:
@@ -227,11 +225,11 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         return R().call_and_step("docs.search", {"query": query})  # type: ignore[return-value]
 
     @srv.tool(name="docs.create", description="Create a document")
-    def docs_create(title: str, body: str, tags: list[str] | None = None) -> dict[str, Any]:
+    def docs_create(title: str, body: str, tags: list = None) -> dict[str, Any]:
         return R().call_and_step("docs.create", {"title": title, "body": body, "tags": tags})
 
     @srv.tool(name="docs.update", description="Update a document")
-    def docs_update(doc_id: str, title: str | None = None, body: str | None = None, tags: list[str] | None = None) -> dict[str, Any]:
+    def docs_update(doc_id: str, title: str = None, body: str = None, tags: list = None) -> dict[str, Any]:
         try:
             return R().call_and_step(
                 "docs.update",
@@ -249,9 +247,9 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         title: str,
         start_ms: int,
         end_ms: int,
-        attendees: list[str] | None = None,
-        location: str | None = None,
-        description: str | None = None,
+        attendees: list = None,
+        location: str = None,
+        description: str = None,
     ) -> dict[str, Any]:
         return R().call_and_step(
             "calendar.create_event",
@@ -291,14 +289,14 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
             return {"error": {"code": e.code, "message": e.message}}
 
     @srv.tool(name="tickets.create", description="Create a ticket")
-    def tickets_create(title: str, description: str | None = None, assignee: str | None = None) -> dict[str, Any]:
+    def tickets_create(title: str, description: str = None, assignee: str = None) -> dict[str, Any]:
         return R().call_and_step(
             "tickets.create",
             {"title": title, "description": description, "assignee": assignee},
         )
 
     @srv.tool(name="tickets.update", description="Update a ticket")
-    def tickets_update(ticket_id: str, description: str | None = None, assignee: str | None = None) -> dict[str, Any]:
+    def tickets_update(ticket_id: str, description: str = None, assignee: str = None) -> dict[str, Any]:
         try:
             return R().call_and_step(
                 "tickets.update",
@@ -355,7 +353,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         return R().call_and_step("erp.list_invoices", {})  # type: ignore[return-value]
 
     @srv.tool(name="erp.match_three_way", description="Three-way match PO vs receipt vs invoice")
-    def erp_match_three_way(po_id: str, invoice_id: str, receipt_id: str | None = None) -> dict[str, Any]:
+    def erp_match_three_way(po_id: str, invoice_id: str, receipt_id: str = None) -> dict[str, Any]:
         return R().call_and_step("erp.match_three_way", {"po_id": po_id, "invoice_id": invoice_id, "receipt_id": receipt_id})
 
     @srv.tool(name="erp.post_payment", description="Post a payment against an invoice")
@@ -364,7 +362,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
 
     # --- CRM twin tools ---
     @srv.tool(name="crm.create_contact", description="Create a CRM contact")
-    def crm_create_contact(email: str, first_name: str | None = None, last_name: str | None = None, do_not_contact: bool = False) -> dict[str, Any]:
+    def crm_create_contact(email: str, first_name: str = None, last_name: str = None, do_not_contact: bool = False) -> dict[str, Any]:
         return R().call_and_step("crm.create_contact", {"email": email, "first_name": first_name, "last_name": last_name, "do_not_contact": do_not_contact})
 
     @srv.tool(name="crm.get_contact", description="Get contact by id")
@@ -376,7 +374,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         return R().call_and_step("crm.list_contacts", {})  # type: ignore[return-value]
 
     @srv.tool(name="crm.create_company", description="Create a company")
-    def crm_create_company(name: str, domain: str | None = None) -> dict[str, Any]:
+    def crm_create_company(name: str, domain: str = None) -> dict[str, Any]:
         return R().call_and_step("crm.create_company", {"name": name, "domain": domain})
 
     @srv.tool(name="crm.get_company", description="Get company by id")
@@ -392,7 +390,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         return R().call_and_step("crm.associate_contact_company", {"contact_id": contact_id, "company_id": company_id})
 
     @srv.tool(name="crm.create_deal", description="Create a deal")
-    def crm_create_deal(name: str, amount: float, stage: str = "New", contact_id: str | None = None, company_id: str | None = None) -> dict[str, Any]:
+    def crm_create_deal(name: str, amount: float, stage: str = "New", contact_id: str = None, company_id: str = None) -> dict[str, Any]:
         return R().call_and_step("crm.create_deal", {"name": name, "amount": amount, "stage": stage, "contact_id": contact_id, "company_id": company_id})
 
     @srv.tool(name="crm.get_deal", description="Get deal by id")
@@ -408,7 +406,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         return R().call_and_step("crm.update_deal_stage", {"id": id, "stage": stage})
 
     @srv.tool(name="crm.log_activity", description="Log activity (note/email_outreach)")
-    def crm_log_activity(kind: str, contact_id: str | None = None, deal_id: str | None = None, note: str | None = None) -> dict[str, Any]:
+    def crm_log_activity(kind: str, contact_id: str = None, deal_id: str = None, note: str = None) -> dict[str, Any]:
         return R().call_and_step("crm.log_activity", {"kind": kind, "contact_id": contact_id, "deal_id": deal_id, "note": note})
 
     # --- Configurable alias packs (ERP) ---
@@ -436,7 +434,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
             _register_alias(alias, base)
 
     @srv.tool(name="vei.observe", description="Get current observation summary + action menu")
-    def vei_observe(focus: str | None = None) -> dict[str, Any]:
+    def vei_observe(focus: str = None) -> dict[str, Any]:
         return R().observe(focus_hint=focus).model_dump()
 
     @srv.tool(name="vei.ping", description="Health check and current logical time")
@@ -444,7 +442,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         return {"ok": True, "time_ms": R().bus.clock_ms}
 
     @srv.tool(name="vei.reset", description="Reset the simulation deterministically (optionally with a new seed)")
-    def vei_reset(seed: int | None = None) -> dict[str, Any]:
+    def vei_reset(seed: int = None) -> dict[str, Any]:
         old = R()
         new_seed = int(seed) if seed is not None else int(os.environ.get("VEI_SEED", "42042"))
         # Preserve scenario and artifacts configuration so the environment stays consistent for the session
