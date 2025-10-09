@@ -12,6 +12,21 @@ Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server expose
 - **Deterministic**: seeded event bus for replies/arrivals/interrupts; identical runs for a fixed seed + artifacts.
 - **No external SaaS**: all data is synthetic; live modes can be sandboxed.
 
+### Table of Contents
+1. [Architecture](#architecture)
+2. [Quickstart](#quickstart)
+   - [Install](#install)
+   - [Configure](#configure)
+   - [Verify setup](#verify-setup)
+   - [Transport smoke tests](#transport-smoke-tests-stdio-first-sse-optional)
+   - [Run the demo](#run-the-demo)
+   - [Train a simple policy](#train-a-simple-policy)
+3. [Dataset tooling & evaluation](#dataset-tooling--evaluation)
+4. [Testing](#testing)
+5. [Start the MCP server](#start-the-mcp-server-manual-optional)
+6. [ERP twin, alias packs, and scoring](#erp-twin-alias-packs-and-scoring)
+7. [Latest Multi-Provider Evaluation](#latest-multi-provider-evaluation-2025-10-08--multi_channel)
+
 ### Architecture
 ```
 Agent ──MCP──► VEI Router (this repo)
@@ -118,46 +133,47 @@ PY
 
 ### Dataset tooling & evaluation
 
-Generate scripted rollouts, package replay datasets, and evaluate agents:
+Follow the canonical procurement workflow, then adapt it as needed:
 
-```bash
-# Scripted rollout → canonical dataset
-vei-rollout procurement --episodes 3 --seed 42042 --output ./_vei_out/rollout.json
+1. **Generate a deterministic dataset**
+   ```bash
+   vei-rollout procurement --episodes 3 --seed 42042 --output ./_vei_out/rollout.json
+   ```
+2. **Package optional source datasets** (Slack/Mail/Tickets/Docs)
+   ```bash
+   vei-pack slack --export-path ./slack_export --output ./datasets/slack.json
+   vei-pack mail --mail-dir ./mail_messages --output ./datasets/mail.json
+   vei-pack tickets --tickets-dir ./ticket_updates --output ./datasets/tickets.json
+   vei-pack docs --docs-dir ./docs_snapshot --output ./datasets/docs.json
+   ```
+3. **Train a behaviour-cloning policy**
+   ```bash
+   vei-train bc --dataset ./_vei_out/rollout.json --output ./_vei_out/bc_policy.json
+   ```
+4. **Score scripted or BC policies** (emits `trace.jsonl` + `score.json`)
+   ```bash
+   vei-eval scripted --seed 42042 --artifacts ./_vei_out/eval_scripted
+   vei-eval bc --model ./_vei_out/bc_policy.json --seed 42042 --artifacts ./_vei_out/eval_bc
+   ```
 
-# Package sources into datasets (Slack/Mail/Tickets/Docs)
-vei-pack slack --export-path ./slack_export --output ./datasets/slack.json
-vei-pack mail --mail-dir ./mail_messages --output ./datasets/mail.json
-vei-pack tickets --tickets-dir ./ticket_updates --output ./datasets/tickets.json
-vei-pack docs --docs-dir ./docs_snapshot --output ./datasets/docs.json
-
-# Train a behavior-cloning policy from rollout data
-vei-train bc --dataset ./_vei_out/rollout.json --output ./_vei_out/bc_policy.json
-
-# Evaluate scripted baseline or BC policy (writes traces + score.json)
-vei-eval scripted --seed 42042 --artifacts ./_vei_out/eval_scripted
-vei-eval bc --model ./_vei_out/bc_policy.json --seed 42042 --artifacts ./_vei_out/eval_bc
-```
-
-LLM evaluations run against the same MCP router and can optionally prime datasets:
+To benchmark an LLM against the same dataset:
 
 ```bash
 vei-llm-test --model gpt-5 --task "Research vendor quote" --dataset ./_vei_out/rollout.json \
   --artifacts ./_vei_out/llm_eval
+```
 
-LLM evaluations also support fully unscripted runs against richer scenarios. For example,
+To exercise richer environments (tickets + docs + seeded disruptions):
 
 ```bash
-# Use the multi-channel scenario (tickets + docs + seeded vendor reply)
 export VEI_SCENARIO=multi_channel
 vei-llm-test --model gpt-5 \
   --task "Review ticket TCK-42, gather laptop quote, and email results" \
   --max-steps 12 --artifacts ./_vei_out/llm_eval_multichannel
+unset VEI_SCENARIO
 ```
 
-After the run, inspect `_vei_out/llm_eval_multichannel/trace.jsonl` and
-`score.json` to analyse behaviour. Unset `VEI_SCENARIO` to return to the
-default environment.
-```
+After each run, review `trace.jsonl` and `score.json` in the chosen `--artifacts` directory to assess behaviour.
 
 ### Testing
 Prefer invoking pytest via the active interpreter to avoid host shims:
