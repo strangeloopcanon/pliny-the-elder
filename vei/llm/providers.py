@@ -272,7 +272,6 @@ async def _google_plan(
     config = genai.types.GenerateContentConfig(
         temperature=0.0,
         top_p=1,
-        max_output_tokens=2048,
         response_mime_type="application/json"
     )
     
@@ -311,9 +310,18 @@ async def _openrouter_plan(
     if AsyncOpenAI is None:
         raise RuntimeError("openai SDK not installed; install with extras [llm]")
     
+    headers: Dict[str, str] = {}
+    referer = os.environ.get("OPENROUTER_HTTP_REFERER")
+    app_title = os.environ.get("OPENROUTER_APP_TITLE")
+    if referer:
+        headers["HTTP-Referer"] = referer
+    if app_title:
+        headers["X-Title"] = app_title
+
     client = AsyncOpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=api_key or os.environ.get("OPENROUTER_API_KEY")
+        api_key=api_key or os.environ.get("OPENROUTER_API_KEY"),
+        default_headers=headers or None,
     )
     
     try:
@@ -337,7 +345,13 @@ async def _openrouter_plan(
             raise RuntimeError(f"OpenRouter response truncated due to max_tokens.")
 
         if choice.message.content:
-            return json.loads(choice.message.content)
+            try:
+                return json.loads(choice.message.content)
+            except json.JSONDecodeError as exc:
+                snippet = choice.message.content.strip()
+                if len(snippet) > 200:
+                    snippet = snippet[:200] + "…"
+                raise RuntimeError(f"OpenRouter returned non-JSON payload: {snippet}") from exc
         
     except Exception:
         raise

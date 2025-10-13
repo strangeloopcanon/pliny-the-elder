@@ -35,6 +35,26 @@ def test_multi_channel_scenario_has_docs_and_tickets():
     assert tickets and tickets[0]["ticket_id"] == "TCK-42"
 
 
+def test_multi_channel_compliance_has_audit_assets():
+    scen = get_scenario("multi_channel_compliance")
+    assert scen.documents
+    doc_ids = {doc.doc_id for doc in scen.documents.values()}
+    assert {"POLICY-1", "PROC-7", "RISK-9"}.issubset(doc_ids)
+    assert scen.tickets
+    ticket_ids = {ticket.ticket_id for ticket in scen.tickets.values()}
+    assert {"TCK-42", "TCK-88"}.issubset(ticket_ids)
+    assert scen.participants and any(p.participant_id == "auditor-li" for p in scen.participants)
+    assert scen.derail_events and len(scen.derail_events) >= 2
+
+    r = Router(seed=101, artifacts_dir=None, scenario=scen)
+    docs = r.call_and_step("docs.list", {})
+    titles = {d["title"] for d in docs}
+    assert "Procurement Checklist" in titles
+    tickets = r.call_and_step("tickets.list", {})
+    listed_ids = {t["ticket_id"] for t in tickets}
+    assert {"TCK-42", "TCK-88"}.issubset(listed_ids)
+
+
 def test_f2_knowledge_qa_scenario_loads_correctly():
     """Verify the F2 scenario loads with correct documents and events."""
     scen = get_scenario("f2_knowledge_qa")

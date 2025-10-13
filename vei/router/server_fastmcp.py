@@ -5,6 +5,7 @@ from mcp.server.fastmcp import server as fserver
 from pydantic import BaseModel, Field
 
 from .core import Router, MCPError
+from .tool_registry import ToolSpec
 from .alias_packs import ERP_ALIAS_PACKS, CRM_ALIAS_PACKS
 
 
@@ -422,6 +423,26 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
             except MCPError as e:
                 return {"error": {"code": e.code, "message": e.message}}
 
+        base_spec = R().registry.get(base_tool)
+        if base_spec:
+            alias_spec = ToolSpec(
+                name=alias_name,
+                description=f"Alias → {base_tool}. {base_spec.description}",
+                side_effects=base_spec.side_effects,
+                permissions=base_spec.permissions,
+                default_latency_ms=base_spec.default_latency_ms,
+                latency_jitter_ms=base_spec.latency_jitter_ms,
+                nominal_cost=base_spec.nominal_cost,
+                returns=base_spec.returns,
+                fault_probability=base_spec.fault_probability,
+            )
+        else:
+            alias_spec = ToolSpec(name=alias_name, description=f"Alias → {base_tool}")
+        try:
+            R().registry.register(alias_spec)
+        except ValueError:
+            pass
+
     for pack in packs:
         for alias, base in ERP_ALIAS_PACKS.get(pack, []):
             _register_alias(alias, base)
@@ -462,6 +483,13 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
         except MCPError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
+    @srv.tool(name="vei.tools.search", description="Search the tool catalog for relevant entries")
+    def vei_tools_search(query: str, top_k: int = 10) -> dict[str, Any]:
+        limit = top_k if isinstance(top_k, int) else 10
+        if limit < 0:
+            limit = 0
+        return R().search_tools(query, top_k=limit)
+
     @srv.tool(name="vei.tick", description="Advance logical time by dt_ms and deliver due events")
     def vei_tick(dt_ms: int = 1000) -> dict[str, Any]:
         return R().tick(dt_ms)
@@ -493,6 +521,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
                 {"tool": "vei.tick", "args": {"dt_ms": "int?"}},
                 {"tool": "vei.pending", "args": {}},
                 {"tool": "vei.state", "args": {"tool_tail": "int?", "include_state": "bool?"}},
+                {"tool": "vei.tools.search", "args": {"query": "keywords", "top_k": "int?"}},
                 {"tool": "vei.reset", "args": {"seed": "int?"}},
                 {"tool": "browser.read", "args": {}},
                 {"tool": "browser.find", "args": {"query": "str", "top_k": "int?"}},
@@ -528,6 +557,7 @@ def create_mcp_server(router: Router, host: str | None = None, port: int | None 
                 {"tool": "slack.send_message", "args": {"channel": "#procurement", "text": "Summary: budget $3200, citations included."}},
                 {"tool": "mail.compose", "args": {"to": "sales@macrocompute.example", "subj": "Quote request", "body_text": "Please send latest price and ETA."}},
                 {"tool": "vei.state", "args": {"tool_tail": 5}},
+                {"tool": "vei.tools.search", "args": {"query": "slack approval budget", "top_k": 8}},
                 {"tool": "vei.ping", "args": {}},
                 {"tool": "vei.reset", "args": {"seed": 42042}},
                 {"tool": "vei.act_and_observe", "args": {"tool": "browser.read", "args": {}}},

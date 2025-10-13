@@ -8,7 +8,7 @@ Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server expose
 <!-- Demo branch change for GitHub workflow demonstration -->
 
 ### Highlights
-- **MCP-native tools**: `slack.*`, `mail.*`, `browser.*`, and `vei.*` helpers.
+- **MCP-native tools**: `slack.*`, `mail.*`, `browser.*`, and `vei.*` helpers (now including `vei.tools.search` for catalog retrieval).
 - **Deterministic**: seeded event bus for replies/arrivals/interrupts; identical runs for a fixed seed + artifacts.
 - **No external SaaS**: all data is synthetic; live modes can be sandboxed.
 
@@ -25,7 +25,7 @@ Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server expose
 4. [Testing](#testing)
 5. [Start the MCP server](#start-the-mcp-server-manual-optional)
 6. [ERP twin, alias packs, and scoring](#erp-twin-alias-packs-and-scoring)
-7. [Latest Multi-Provider Evaluation](#latest-multi-provider-evaluation-2025-10-08--multi_channel)
+7. [Latest Multi-Provider Evaluation](#latest-multi-provider-evaluation-2025-10-11--multi_channel)
 
 ### Architecture
 ```
@@ -108,6 +108,10 @@ vei-chat --model gpt-5 --max-steps 15 --transport sse --timeout-s 45
 vei-llm-test --model gpt-5 \
   --task "Research product price, get Slack approval < $3200, email vendor for a quote."
 
+# Limit the prompt-visible tool catalog (baseline tools stay available).
+vei-llm-test --model gpt-5 --tool-top-k 12 \
+  --task "Research product price, get Slack approval < $3200, email vendor for a quote."
+
 # One-command demo with artifacts
 vei-demo --mode llm --model gpt-5 --artifacts-dir ./_vei_out/demo_run
 vei-demo --mode llm --transport stdio --model gpt-5 --artifacts-dir ./_vei_out/demo_run
@@ -170,6 +174,12 @@ export VEI_SCENARIO=multi_channel
 vei-llm-test --model gpt-5 \
   --task "Review ticket TCK-42, gather laptop quote, and email results" \
   --max-steps 12 --artifacts ./_vei_out/llm_eval_multichannel
+
+# Compliance variant stresses doc/ticket linking and audit follow-ups
+export VEI_SCENARIO=multi_channel_compliance
+vei-llm-test --model gpt-5 \
+  --task "Capture quote in Docs, update all linked tickets, and satisfy audit reminders" \
+  --max-steps 14 --artifacts ./_vei_out/llm_eval_compliance
 unset VEI_SCENARIO
 ```
 
@@ -291,7 +301,7 @@ Default model: `gpt-5` (override via `VEI_MODEL` or `--model`).
 - **Objective**: Research product details (citations), post approval to `#procurement` (<$3200), email the vendor for a quote, and parse the vendor reply (price + ETA).
 - **Transport**: MCP stdio (`python -m vei.router`) for determinism and CI friendliness.
 - **Artifacts**: Set `VEI_ARTIFACTS_DIR` to a clean directory. The router writes `trace.jsonl` there; CLIs may also write a human‑readable transcript.
-- **Scoring**: `vei-score` evaluates `trace.jsonl` for subgoals: `citations`, `approval`, `email_sent`, `email_parsed`. Success requires all in `full` mode.
+- **Scoring**: `vei-score` evaluates `trace.jsonl` for subgoals: `citations`, `approval`, `approval_with_amount`, `email_sent`, `email_parsed`, `doc_logged`, `ticket_updated`, `crm_logged`. Success requires all of them in `full` mode; the CLI defaults to `email` mode for quick smoke checks.
 
 ### 🎯 Frontier Model Evaluation (NEW)
 
@@ -338,30 +348,61 @@ VEI_SEED=42042 vei-llm-test \
 vei-score --artifacts-dir _vei_out/gpt5_llmtest --success-mode full
 ```
 
-### Latest Multi-Provider Evaluation (2025‑10‑08 · multi_channel)
+### Latest Multi-Provider Evaluation (2025‑10‑12 · multi_channel)
 
-**Summary** – All models were run in the multi-channel scenario (Slack, Mail, Docs, Tickets). Each exhausted the 40-step budget and failed to parse the vendor reply because of repetitive slack/mail loops. Use this run as a stress baseline for complex environments.
+**Summary** – Five providers attempted the seeded MacroCompute procurement workflow (`VEI_SCENARIO=multi_channel`, dataset `_vei_out/datasets/multi_channel_seed42042.json`, max 40 tool steps). None closed every enterprise subgoal. OpenAI models still loop on Slack/mail without documenting the quote; Claude logs CRM notes but misses Docs/Tickets; Grok occasionally returns malformed JSON; Gemini 2.5 Pro now runs longer but also skips Docs logging. Treat this snapshot as the regression baseline.
 
-| Provider/Model | Success | Actions | Citations | Approval | Email Sent | Email Parsed | Key warnings |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| OpenAI / gpt-5 | ✗ | 39 | 1 | 1 | 1 | 0 | `usage.repetition` (browser.read/slack/mail), `mail.outbound_volume` |
-| OpenAI / gpt-5-codex | ✗ | 39 | 1 | 1 | 0 | 0 | Stalled before vendor reply; browser/slack loops |
-| Anthropic / claude-sonnet-4-5 | ✗ | 39 | 1 | 1 | 1 | 0 | Used `vei_call` bridge, but repeated mail/slack prevented completion |
-| OpenRouter / x-ai_grok-4 | ✗ | 0 | 0 | 0 | 0 | 0 | Transport aborted before first action |
-| Google / models/gemini-2.5-flash | ✗ | 39 | 0 | 1 | 1 | 0 | Slack/mail repetition; no vendor parse |
+**Latest snapshot (run `multi_provider_20251012_122020`)**
 
-Artifacts: `_vei_out/gpt5_llmtest/multi_provider_20251008_181830/` (per-model `trace.jsonl`, `score.json`, `stderr.log`). `summary.txt` now mirrors `vei-score` warnings (`usage.repetition`, `mail.outbound_volume`, etc.) so you can evaluate efficiency even when a run technically “succeeds”. Token usage prints when providers return it; in this run all models reported `tokens=0`.
+| Model | Success | Actions | Subgoals (cit/appr/appr_amt/email_sent/email_parsed/doc/ticket/crm) | Policy (warn/err) | Warning highlights |
+| --- | --- | ---: | --- | --- | --- |
+| openai/gpt-5 | ✗ | 39 | 1/1/0/1/0/0/0/0 | 2/0 | mail repetition; missing doc/ticket updates |
+| openai/gpt-5-codex | ✗ | 37 | 1/1/1/1/0/0/0/0 | 2/0 | browser/slack loops; missing doc/ticket updates |
+| anthropic/claude-sonnet-4-5 | ✗ | 26 | 1/1/0/0/0/0/0/1 | 5/0 | CRM notes lack ETA; no doc/ticket updates |
+| openrouter/x-ai/grok-4 | ✗ | 10 | 1/1/0/1/0/0/0/0 | 2/0 | halted early; no doc/ticket updates |
+| google/models/gemini-2.5-pro | ✗ | 4 | 1/1/0/1/0/0/0/0 | 2/0 | stopped early; no doc/ticket updates |
 
-> ℹ️ Anthropic’s Messages API accepts at most 16 tools and enforces `^[A-Za-z0-9_-]{1,64}$` names. We expose a single `vei_call` bridge so Claude can invoke any MCP tool by name (`{"tool": "docs.read", "args": {...}}`).
+Additional reruns:
+- `multi_provider_20251012_145901` – Gemini 2.5 Pro reached 23 actions (ticket update achieved) but still skipped quote documentation (`doc_logged=0`).
+- OpenRouter reruns (e.g. `multi_provider_20251011_230810`) continue to fail whenever Grok emits non-JSON; inspect `stderr.log` for the raw payload.
 
+**Recent trend (best observed per model across recorded runs)**
+
+| Model | Best actions (run id) | Subgoals hit | Remaining gaps |
+| --- | --- | --- | --- |
+| openai/gpt-5 | 39 (`multi_provider_20251011_230810`) | citations, approval, email_sent | Never logs quote in Docs or updates tickets/CRM |
+| openai/gpt-5-codex | 38 (`multi_provider_20251011_230810`) | adds approval_with_amount over gpt-5 | Same doc/ticket/CRM gaps |
+| anthropic/claude-sonnet-4-5 | 30 (`multi_provider_20251011_230810`) | citations, approval, CRM note | Misses vendor email parsing + Docs/Tickets |
+| openrouter/x-ai/grok-4 | 10 (`multi_provider_20251012_122020`) | short Slack/Mail loop | Frequently returns invalid JSON; no Doc/Ticket coverage |
+| google/models/gemini-2.5-pro | 23 (`multi_provider_20251012_145901`) | citations, approval, email_sent, ticket_updated | Still fails to capture quote in Docs or log CRM note |
+
+Generate refreshed dashboards from the saved artifacts:
+```bash
+python tools/render_multi_provider_dashboard.py _vei_out/gpt5_llmtest > dashboard.md
+# or only the newest run
+python tools/render_multi_provider_dashboard.py --latest-only _vei_out/gpt5_llmtest
+```
+The script parses the per-scenario `summary.txt` files and emits Markdown tables you can drop into reports. Raw traces, transcripts, scores, and stderr logs live under `_vei_out/gpt5_llmtest/<run_id>/`.
 ### Previous Evaluation (2025‑09‑30 · procurement baseline)
 
 The original procurement-only leaderboard is still available at `evals/multi_provider_20250930_000632/LEADERBOARD.md` for comparison.
 
 Run your own multi-provider eval:
 ```bash
+# Default (multi_channel scenario, full model list)
 ./run_multi_provider_eval.sh
+
+# Target specific providers across multiple scenarios
+VEI_MODELS='gpt-5:openai,claude-sonnet-4-5:anthropic' \
+VEI_SCENARIOS='multi_channel,multi_channel_compliance' \
+./run_multi_provider_eval.sh
+
+# Disable scripted baseline or add a BC checkpoint baseline
+VEI_BASELINES=none ./run_multi_provider_eval.sh
+VEI_BASELINES='scripted,bc:./_vei_out/bc_policy.json' ./run_multi_provider_eval.sh
 ```
+
+Each scenario directory now includes optional baseline runs (e.g. `baseline_scripted/score.json`) plus model subdirectories. The summary captures tokens, wall-clock sim time, top tool usage, and policy warning counts to make regressions easier to spot at a glance.
 
 Notes on model behavior and failure modes
 - **Empty/observe plans**: If the model outputs `{}` or explicitly chooses `vei.observe`, no tool call is executed and no `trace.jsonl` entry is produced. This is not a transport failure, but the episode will not reach success and scoring will return `success: false`.

@@ -5,7 +5,7 @@ import os
 import random
 from typing import Any, Dict, List, Optional
 
-from .scenario import Scenario, Document, Ticket
+from .scenario import Scenario, Document, Ticket, Participant
 
 
 def scenario_macrocompute_default() -> Scenario:
@@ -121,10 +121,118 @@ def scenario_multi_channel() -> Scenario:
     )
 
 
+def scenario_multi_channel_compliance() -> Scenario:
+    docs = {
+        "policy": Document(
+            doc_id="POLICY-1",
+            title="Expense Policy",
+            body="All purchases over $2000 require manager approval and attached vendor quote.",
+            tags=["policy", "compliance"],
+        ),
+        "checklist": Document(
+            doc_id="PROC-7",
+            title="Procurement Checklist",
+            body=(
+                "1. Capture vendor quote in Docs\n"
+                "2. Link quote to ticket TCK-42\n"
+                "3. Log CRM note with approved amount\n"
+                "4. Confirm delivery ticket is opened"
+            ),
+            tags=["checklist", "procurement"],
+        ),
+        "risk-register": Document(
+            doc_id="RISK-9",
+            title="Risk Register Excerpt",
+            body="Record ETA and supplier commitments for audits. Missing ETA triggers compliance follow-up.",
+            tags=["audit", "risk"],
+        ),
+    }
+    tickets = {
+        "TCK-42": Ticket(
+            ticket_id="TCK-42",
+            title="Procurement Request",
+            status="open",
+            description="Acquire MacroBook Pro 16 with accessories",
+            history=[{"status": "open"}, {"status": "triaged"}],
+        ),
+        "TCK-88": Ticket(
+            ticket_id="TCK-88",
+            title="Delivery Coordination",
+            status="pending",
+            description="Arrange delivery once quote is approved",
+            history=[{"status": "pending"}],
+        ),
+    }
+    participants = [
+        Participant(
+            participant_id="mgr-amy",
+            name="Amy Santiago",
+            role="Procurement Manager",
+            email="amy@macrocompute.example",
+            slack="@amy",
+        ),
+        Participant(
+            participant_id="auditor-li",
+            name="Li Zhang",
+            role="Compliance Auditor",
+            email="li@macrocompute.example",
+            slack="@li",
+        ),
+    ]
+    events = [
+        {
+            "dt_ms": 5000,
+            "target": "mail",
+            "payload": {
+                "from": "sales@macrocompute.example",
+                "subj": "Formal Quote",
+                "body_text": "Quote $3199, ETA 5 business days. Attach this to Docs and confirm delivery ticket.",
+            },
+        },
+        {
+            "dt_ms": 9000,
+            "target": "slack",
+            "payload": {
+                "channel": "#procurement",
+                "text": "@amy: Please ensure the quote doc is stored under PROC-7 and ticket TCK-88 is updated with ETA.",
+            },
+        },
+        {
+            "dt_ms": 12000,
+            "target": "mail",
+            "payload": {
+                "from": "li@macrocompute.example",
+                "subj": "Audit Reminder",
+                "body_text": "Compliance check: log the CRM contact, include ETA in note, and link risk register entry RISK-9.",
+            },
+        },
+    ]
+    return Scenario(
+        budget_cap_usd=3200,
+        derail_prob=0.08,
+        slack_initial_message=(
+            "Remember: TCK-42 must reference the stored quote doc, and delivery tracking lives in TCK-88."
+        ),
+        vendor_reply_variants=[
+            "Formal quote: Total $3199, ETA 5 business days.",
+            "MacroCompute Sales — Quote: 3,199 USD. Delivery promise: 5 days. Attach to PROC-7.",
+        ],
+        documents=docs,
+        tickets=tickets,
+        participants=participants,
+        derail_events=events,
+        metadata={
+            "requires_documents": ["PROC-7", "RISK-9"],
+            "linked_tickets": ["TCK-42", "TCK-88"],
+        },
+    )
+
+
 _CATALOG: Dict[str, Scenario] = {
     "macrocompute_default": scenario_macrocompute_default(),
     "extended_store": scenario_extended_store(),
     "multi_channel": scenario_multi_channel(),
+    "multi_channel_compliance": scenario_multi_channel_compliance(),
 }
 
 

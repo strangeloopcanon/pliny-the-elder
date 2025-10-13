@@ -8,8 +8,9 @@ individually.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 @dataclass(slots=True)
@@ -65,3 +66,57 @@ class ToolRegistry:
 
     def describe(self) -> List[Dict[str, object]]:
         return [spec.to_dict() for spec in self.list()]
+
+    def search(self, query: str, *, top_k: int = 10) -> List[Tuple[ToolSpec, float]]:
+        """Return tool specs ranked by heuristic relevance to the query."""
+        specs = list(self._specs.values())
+        if not specs:
+            return []
+
+        limit = top_k if top_k and top_k > 0 else len(specs)
+        normalized = (query or "").strip().lower()
+        if not normalized:
+            ranked = sorted(specs, key=lambda spec: spec.name)
+            return [(spec, 0.0) for spec in ranked[:limit]]
+
+        terms = [t for t in re.split(r"[\W_]+", normalized) if t]
+        results: List[Tuple[ToolSpec, float]] = []
+        for spec in specs:
+            score = self._score_spec(spec, normalized, terms)
+            results.append((spec, score))
+
+        results.sort(key=lambda item: (-item[1], item[0].name))
+        top_results = results[:limit]
+        if top_results and top_results[0][1] <= 0.0:
+            fallback = sorted(specs, key=lambda spec: spec.name)[:limit]
+            return [(spec, 0.0) for spec in fallback]
+        return top_results
+
+    @staticmethod
+    def _score_spec(spec: ToolSpec, normalized: str, terms: List[str]) -> float:
+        name = spec.name.lower()
+        description = (spec.description or "").lower()
+        score = 0.0
+
+        if normalized and normalized in name:
+            score += 6.0
+        if normalized and normalized in description:
+            score += 2.5
+
+        name_tokens = [tok for tok in re.split(r"[.\-:/_\s]+", name) if tok]
+        desc_tokens = [tok for tok in re.split(r"[\W_]+", description) if tok]
+
+        for term in terms:
+            if term in name_tokens:
+                score += 3.0
+            else:
+                starts_with_match = any(tok.startswith(term) for tok in name_tokens)
+                if starts_with_match:
+                    score += 1.5
+            if term in desc_tokens:
+                score += 1.0
+
+        # Slight preference for deterministic VEI orchestrator tools when ties occur.
+        if spec.name.startswith("vei."):
+            score += 0.25
+        return score

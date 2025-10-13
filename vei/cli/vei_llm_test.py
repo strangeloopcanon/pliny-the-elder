@@ -6,7 +6,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Iterable
 import re
 from urllib.parse import urlparse
 
@@ -54,6 +54,58 @@ PREFERRED_ANTHROPIC_TOOLS: List[str] = [
     "tickets.list",
     "tickets.get",
 ]
+
+
+BASELINE_VISIBLE_TOOLS: List[str] = [
+    "vei.observe",
+    "vei.tick",
+    "vei.act_and_observe",
+    "vei.tools.search",
+    "vei.state",
+    "vei.call",
+]
+
+
+def _select_visible_tools(
+    *,
+    available: Iterable[str],
+    action_menu: Iterable[Dict[str, Any]] | None,
+    search_matches: Iterable[str],
+    baseline: Iterable[str],
+    top_k: int,
+) -> List[str]:
+    available_list = list(available)
+    available_set = {name for name in available_list}
+    ordered: List[str] = []
+
+    def _add(name: str) -> None:
+        if name and name in available_set and name not in ordered:
+            ordered.append(name)
+
+    baseline_set = {name for name in baseline if name in available_set}
+    for name in baseline_set:
+        _add(name)
+
+    action_tools = {
+        str(item.get("tool"))
+        for item in (action_menu or [])
+        if isinstance(item, dict) and item.get("tool")
+    }
+    for name in sorted(action_tools):
+        _add(name)
+
+    for match in search_matches:
+        _add(match)
+
+    for name in available_list:
+        _add(name)
+
+    if top_k and top_k > 0:
+        required = baseline_set.union(action_tools)
+        required_count = sum(1 for name in ordered if name in required)
+        limit = max(top_k, required_count)
+        return ordered[:limit]
+    return ordered
 
 
 def _build_anthropic_tool_schemas(tools_info: object) -> Tuple[list[dict[str, Any]], Dict[str, str]]:
@@ -123,6 +175,32 @@ def _build_anthropic_tool_schemas(tools_info: object) -> Tuple[list[dict[str, An
     return schemas, alias_map
 
 
+def _filter_anthropic_tools(
+    schemas: list[dict[str, Any]] | None,
+    alias_map: Dict[str, str] | None,
+    allowed_tools: Iterable[str],
+) -> Tuple[list[dict[str, Any]] | None, Dict[str, str] | None]:
+    if not schemas:
+        return None, alias_map
+    if not alias_map:
+        return schemas, alias_map
+
+    allowed_set = {name for name in allowed_tools}
+    reverse_alias = {true: alias for alias, true in alias_map.items()}
+    allowed_aliases = {reverse_alias[name] for name in allowed_set if name in reverse_alias}
+
+    filtered = [
+        schema
+        for schema in schemas
+        if schema.get("name") == "vei_call" or schema.get("name") in allowed_aliases
+    ]
+    if not filtered:
+        filtered = [schema for schema in schemas if schema.get("name") == "vei_call"] or schemas[: min(16, len(schemas))]
+        allowed_aliases = {schema.get("name") for schema in filtered if schema.get("name") in alias_map}
+    trimmed_alias_map = {alias: alias_map[alias] for alias in allowed_aliases}
+    return filtered, trimmed_alias_map
+
+
 def _normalize_result(res: object) -> dict:
     # Accept raw dicts
     if isinstance(res, dict):
@@ -190,6 +268,7 @@ async def run_episode(
     task: str | None = None,
     dataset_path: str | None = None,
     artifacts_dir: str | None = None,
+    tool_top_k: int = 0,
 ) -> list[dict]:
     # stdio-only transport
     py = os.environ.get("PYTHON", None) or (sys.executable if 'sys' in globals() else None)
@@ -208,28 +287,40 @@ async def run_episode(
             # Enumerate full tool catalog so the model can "see" the environment
             anthropic_tool_schemas: list[dict[str, Any]] | None = None
             anthropic_alias_map: Dict[str, str] | None = None
+            tool_catalog: Dict[str, Dict[str, Any]] = {}
             try:
                 tools_info = await session.list_tools()
-                tool_names = sorted({t.name for t in tools_info.tools})  # type: ignore[attr-defined]
+                for tool in getattr(tools_info, "tools", []) or []:
+                    name = getattr(tool, "name", None)
+                    if not name:
+                        continue
+                    description = getattr(tool, "description", "") or f"MCP tool {name}"
+                    tool_catalog[name] = {"description": description}
+                for baseline in BASELINE_VISIBLE_TOOLS:
+                    tool_catalog.setdefault(baseline, {"description": ""})
+                tool_names = sorted(tool_catalog.keys())
                 anthropic_tool_schemas, anthropic_alias_map = _build_anthropic_tool_schemas(tools_info)
             except Exception:
-                tool_names = sorted(
-                    {
-                        "vei.observe",
-                        "vei.tick",
-                        "vei.help",
-                        "browser.read",
-                        "browser.find",
-                        "browser.open",
-                        "browser.click",
-                        "browser.back",
-                        "slack.send_message",
-                        "mail.compose",
-                        "mail.list",
-                        "mail.open",
-                        "mail.reply",
-                    }
-                )
+                fallback_names = {
+                    "vei.observe",
+                    "vei.tick",
+                    "vei.help",
+                    "vei.tools.search",
+                    "browser.read",
+                    "browser.find",
+                    "browser.open",
+                    "browser.click",
+                    "browser.back",
+                    "slack.send_message",
+                    "mail.compose",
+                    "mail.list",
+                    "mail.open",
+                    "mail.reply",
+                }
+                tool_catalog = {name: {"description": ""} for name in fallback_names}
+                for baseline in BASELINE_VISIBLE_TOOLS:
+                    tool_catalog.setdefault(baseline, {"description": ""})
+                tool_names = sorted(tool_catalog.keys())
 
             base_prompt = SYSTEM_PROMPT
             if task:
@@ -237,14 +328,14 @@ async def run_episode(
             transcript: list[dict] = []
             history: list[str] = []
 
-            # One-time catalog blurb and basic arg hints for common tools to reduce ambiguity
-            catalog_text = "\n".join(f"- {n}" for n in tool_names)
+            # One-time catalog hints for common tools to reduce ambiguity
             common_hints: dict[str, dict] = {
                 "browser.read": {},
                 "browser.find": {"query": "str", "top_k": "int?"},
                 "browser.click": {"node_id": "from observation.action_menu"},
                 "browser.open": {"url": "https://vweb.local/..."},
                 "vei.tick": {"dt_ms": 20000},
+                "vei.tools.search": {"query": "keywords", "top_k": tool_top_k or 8},
                 "slack.send_message": {
                     "channel": "#procurement",
                     "text": "Budget $3200. Link: https://vweb.local/pdp/macrobook-pro-16",
@@ -258,16 +349,86 @@ async def run_episode(
                 "mail.open": {"id": "m1"},
                 "mail.reply": {"id": "m1", "body_text": "Thanks; confirming price and ETA."},
             }
-            hints_lines = [f"- {k} {json.dumps(v)}" for k, v in common_hints.items() if k in tool_names]
-            hints_text = "\n".join(hints_lines)
 
             prev_tool: str | None = None
+            last_search_query: str | None = None
+            last_search_results: List[str] = []
+
             for step in range(max_steps):
                 obs_raw = await call_mcp_tool(session, "vei.observe", {})
                 obs = _normalize_result(obs_raw)
                 transcript.append({"observation": obs})
                 history.append(f"observation {step}: {json.dumps(obs)}")
-                # Open schema (no gating). We present the full tool catalog in the prompt instead of enumerating here.
+                action_menu = obs.get("action_menu") if isinstance(obs, dict) else None
+
+                search_matches: List[str] = []
+                if tool_top_k and tool_top_k > 0:
+                    query_parts: List[str] = []
+                    if task:
+                        query_parts.append(task)
+                    summary = obs.get("summary") if isinstance(obs, dict) else None
+                    if isinstance(summary, str):
+                        query_parts.append(summary)
+                    focus = obs.get("focus") if isinstance(obs, dict) else None
+                    if isinstance(focus, str):
+                        query_parts.append(focus)
+                    menu_tools: List[str] = []
+                    if isinstance(action_menu, list):
+                        for item in action_menu:
+                            if isinstance(item, dict) and item.get("tool"):
+                                menu_tools.append(str(item.get("tool")))
+                            if len(menu_tools) >= 4:
+                                break
+                    if menu_tools:
+                        query_parts.extend(menu_tools)
+                    query = " ".join(part for part in query_parts if part).strip()
+                    if not query and prev_tool:
+                        query = prev_tool
+
+                    if query:
+                        if query != last_search_query:
+                            try:
+                                search_resp = await call_mcp_tool(
+                                    session,
+                                    "vei.tools.search",
+                                    {"query": query, "top_k": tool_top_k},
+                                )
+                                results = search_resp.get("results", []) if isinstance(search_resp, dict) else []
+                                search_matches = [
+                                    str(item.get("name"))
+                                    for item in results
+                                    if isinstance(item, dict) and item.get("name") in tool_catalog
+                                ]
+                                last_search_query = query
+                                last_search_results = search_matches[:]
+                                transcript.append({"tool_search": {"query": query, "results": search_matches}})
+                            except Exception:
+                                search_matches = []
+                                last_search_query = query
+                                last_search_results = []
+                        else:
+                            search_matches = last_search_results[:]
+
+                visible_tools = _select_visible_tools(
+                    available=tool_names,
+                    action_menu=action_menu if isinstance(action_menu, list) else None,
+                    search_matches=search_matches,
+                    baseline=BASELINE_VISIBLE_TOOLS,
+                    top_k=tool_top_k,
+                )
+
+                catalog_lines = []
+                for name in visible_tools:
+                    desc = tool_catalog.get(name, {}).get("description", "")
+                    if desc:
+                        catalog_lines.append(f"- {name}: {desc}")
+                    else:
+                        catalog_lines.append(f"- {name}")
+                catalog_text = "\n".join(catalog_lines)
+                hints_lines = [f"- {k} {json.dumps(v)}" for k, v in common_hints.items() if k in visible_tools]
+                hints_text = "\n".join(hints_lines)
+
+                # Open schema (no gating). We present the tool subset plus allow vei.call for escapes.
                 plan_schema = {
                     "name": "vei.plan.schema",
                     "schema": {
@@ -296,6 +457,15 @@ async def run_episode(
                 eff_provider = auto_provider_for_model(model, (provider or "").strip().lower() or None)
                 plan: dict
                 plan_error: str | None = None
+
+                provider_schemas = anthropic_tool_schemas
+                provider_alias_map = anthropic_alias_map
+                if eff_provider == "anthropic":
+                    provider_schemas, provider_alias_map = _filter_anthropic_tools(
+                        anthropic_tool_schemas,
+                        anthropic_alias_map,
+                        visible_tools,
+                    )
                 try:
                     plan = await plan_once(
                         provider=eff_provider,
@@ -309,18 +479,18 @@ async def run_episode(
                         anthropic_api_key=anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"),
                         google_api_key=google_api_key or os.environ.get("GOOGLE_API_KEY"),
                         openrouter_api_key=openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
-                        tool_schemas=anthropic_tool_schemas if eff_provider == "anthropic" else None,
-                        alias_map=anthropic_alias_map if eff_provider == "anthropic" else None,
+                        tool_schemas=provider_schemas if eff_provider == "anthropic" else None,
+                        alias_map=provider_alias_map if eff_provider == "anthropic" else None,
                     )
                 except Exception as e:
                     plan_error = f"Provider error: {type(e).__name__}: {str(e)}"
                     transcript.append({"plan_error": plan_error})
                     raise  # FAIL FAST - no masking
 
-                if eff_provider == "anthropic" and anthropic_alias_map:
+                if eff_provider == "anthropic" and provider_alias_map:
                     tool_alias = plan.get("tool")
-                    if tool_alias in anthropic_alias_map:
-                        plan["tool"] = anthropic_alias_map[tool_alias]
+                    if tool_alias in provider_alias_map:
+                        plan["tool"] = provider_alias_map[tool_alias]
 
                 tool = str(plan.get("tool", "vei.observe"))
                 args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
@@ -346,13 +516,13 @@ async def run_episode(
                             anthropic_api_key=anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"),
                             google_api_key=google_api_key or os.environ.get("GOOGLE_API_KEY"),
                             openrouter_api_key=openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
-                            tool_schemas=anthropic_tool_schemas if eff_provider == "anthropic" else None,
-                            alias_map=anthropic_alias_map if eff_provider == "anthropic" else None,
+                            tool_schemas=provider_schemas if eff_provider == "anthropic" else None,
+                            alias_map=provider_alias_map if eff_provider == "anthropic" else None,
                         )
-                        if eff_provider == "anthropic" and anthropic_alias_map:
+                        if eff_provider == "anthropic" and provider_alias_map:
                             alias = plan.get("tool")
-                            if alias in anthropic_alias_map:
-                                plan["tool"] = anthropic_alias_map[alias]
+                            if alias in provider_alias_map:
+                                plan["tool"] = provider_alias_map[alias]
                         tool = str(plan.get("tool", "vei.observe"))
                         args = plan.get("args", {}) if isinstance(plan.get("args"), dict) else {}
                     except Exception as e:
@@ -441,6 +611,10 @@ def run(
     task: str | None = typer.Option(None, help="High-level goal for the LLM (prefixed as 'Task: ...')"),
     dataset: Path | None = typer.Option(None, help="Optional dataset JSON to prime replay"),
     artifacts: Path | None = typer.Option(None, help="Optional artifacts directory for traces"),
+    tool_top_k: int = typer.Option(
+        0,
+        help="If >0, limit prompt-visible tools to top-K retrieved via vei.tools.search (baseline tools always included).",
+    ),
 ) -> None:
     load_dotenv(override=True)
     eff_provider = auto_provider_for_model(model, provider)
@@ -471,6 +645,7 @@ def run(
             task=task,
             dataset_path=str(dataset) if dataset else None,
             artifacts_dir=str(artifacts) if artifacts else None,
+            tool_top_k=tool_top_k,
         )
     )
     typer.echo(json.dumps(transcript, indent=2))
