@@ -883,6 +883,10 @@ class Router:
                 side_effects=("time_advance",),
             ),
             ToolSpec(
+                name="vei.tools.search",
+                description="Search the MCP tool catalog for relevant entries.",
+            ),
+            ToolSpec(
                 name="vei.state",
                 description="Inspect state head, receipts, and recent tool calls.",
                 side_effects=(),
@@ -1130,6 +1134,28 @@ class Router:
 
     def last_receipt(self) -> Optional[Dict[str, Any]]:
         return self._receipts[-1] if self._receipts else None
+
+    def search_tools(self, query: str, top_k: int = 10) -> Dict[str, Any]:
+        matches = self.registry.search(query, top_k=top_k)
+        results = [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "score": round(score, 3),
+                "permissions": list(spec.permissions),
+                "side_effects": list(spec.side_effects),
+                "default_latency_ms": spec.default_latency_ms,
+                "latency_jitter_ms": spec.latency_jitter_ms,
+                "fault_probability": spec.fault_probability,
+                "returns": spec.returns,
+            }
+            for spec, score in matches
+        ]
+        return {
+            "query": query,
+            "top_k": top_k,
+            "results": results,
+        }
 
     def call_and_step(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool call, deliver any due event, advance time, and persist trace.
