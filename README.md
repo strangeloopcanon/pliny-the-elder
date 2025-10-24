@@ -509,6 +509,16 @@ Sample vei-llm-test transcript (gpt-5-mini, 6 steps)
 ]
 ```
 
+**Visualize runs**
+- Terminal replay: `vei-visualize replay _vei_out/<run_id>/transcript.json` streams the step-by-step boxes inside your shell (JSON + JSONL supported).
+- Flow map (HTML): `vei-visualize flow _vei_out/<run_id>/transcript.json --out _vei_out/<run_id>/flow.html` renders an interactive fixed-layout board where nodes glow as the plan bounces across Slack, Mail, Docs, Tickets, CRM, etc. (Falls back to `trace.jsonl` automatically when the transcript is empty.)
+- Multi-run dashboard: `vei-visualize dashboard _vei_out/gpt5_llmtest/multi_provider_20251012_122020/multi_channel --out _vei_out/.../flow_dashboard.html` generates a single page with a run selector so you can compare every model lighting up the exact same environment.
+- Animated GIF export: `vei-visualize export _vei_out/<run_id>/transcript.json _vei_out/<run_id>/flow.gif --step-ms 400 --stride 2` captures the same layout via Playwright while keeping file sizes friendly (requires `pip install -e ".[browser]"` + `playwright install`).
+
+| openai/gpt-5 | anthropic/claude-sonnet-4-5 |
+| --- | --- |
+| ![openai/gpt-5 multi-channel flow](docs/assets/gpt5_flow.gif) | ![claude-sonnet-4-5 multi-channel flow](docs/assets/claude_flow.gif) |
+
 
 ### Examples
 
