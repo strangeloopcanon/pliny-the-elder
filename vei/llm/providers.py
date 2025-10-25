@@ -259,42 +259,42 @@ async def _google_plan(
     """Google Gemini provider using genai library with JSON mode."""
     if genai is None:
         raise RuntimeError("google-genai not installed; install with extras [llm]")
-    
-    client = genai.Client(
+
+    genai.configure(
         api_key=api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     )
-    
+
+    model_instance = genai.GenerativeModel(model_name=model)
+
     prompt = (
         f"[system] {system}\n[user] {user}\n"
         "Reply strictly as JSON with keys 'tool' (string) and 'args' (object)."
     )
-    
-    config = genai.types.GenerateContentConfig(
+
+    config = genai.types.GenerationConfig(
         temperature=0.0,
         top_p=1,
-        response_mime_type="application/json"
+        response_mime_type="application/json",
     )
-    
+
     try:
         resp = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.models.generate_content,
-                model=model,
+            model_instance.generate_content_async(
                 contents=[prompt],
-                config=config
+                generation_config=config,
             ),
             timeout=timeout_s
         )
-        
+
         if resp.candidates and resp.candidates[0].finish_reason.name == "MAX_TOKENS":
             raise RuntimeError("Google response truncated due to max_tokens.")
 
         if hasattr(resp, "text") and resp.text:
             return json.loads(resp.text)
-        
+
     except Exception:
         raise
-    
+
     return {"tool": "vei.observe", "args": {}}
 
 
