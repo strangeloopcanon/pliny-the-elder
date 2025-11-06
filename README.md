@@ -1,4 +1,5 @@
 ## VEI (Virtual Enterprise Internet)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/strangeloopcanon/pliny-the-elder)
 
 ![VEI Virtual Office](docs/assets/virtual_office.gif)
 <p align="center"><sub>Conceptual office view</sub></p>
