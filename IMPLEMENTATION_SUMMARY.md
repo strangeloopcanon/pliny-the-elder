@@ -137,6 +137,13 @@ Automatically:
 - Quick start examples
 - Links to full documentation
 
+### 8. **Tool Provider Scaffold + Okta Identity Twin** (`vei/router/tool_providers.py`, `vei/router/identity.py`, `vei/identity/api.py`)
+
+- Added a pluggable `ToolProvider` interface so new MCP surfaces can register specs + dispatch without touching the core router every time. Providers expose metadata to `vei.tools.search`, the monitor stack, and fault injectors automatically.
+- Introduced a deterministic Okta simulator with typed models (users, groups, applications) plus MCP tools (`okta.*`) for listing/activating/deactivating accounts, resetting passwords, managing groups, and assigning SSO apps.
+- Scenario fixtures can seed identity state (`Scenario.identity_*`), and the simulator falls back to defaults for other scenes.
+- Regression tests cover spec registration, group assignment state sync, and error handling for invalid password resets.
+
 ### 7. **Package Updates** (`pyproject.toml`)
 
 Added CLI commands:

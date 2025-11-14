@@ -5,7 +5,15 @@ import os
 import random
 from typing import Any, Dict, List, Optional
 
-from .scenario import Scenario, Document, Ticket, Participant
+from .scenario import (
+    Scenario,
+    Document,
+    Ticket,
+    Participant,
+    IdentityApplicationSeed,
+    IdentityGroupSeed,
+    IdentityUserSeed,
+)
 
 
 def scenario_macrocompute_default() -> Scenario:
@@ -110,6 +118,86 @@ def scenario_multi_channel() -> Scenario:
             },
         }
     ]
+    identity_users = {
+        "USR-1001": IdentityUserSeed(
+            user_id="USR-1001",
+            email="alice@macrocompute.example",
+            login="alice",
+            first_name="Alice",
+            last_name="Nguyen",
+            title="IT Support Lead",
+            department="IT",
+            status="ACTIVE",
+            groups=["GRP-procurement", "GRP-it"],
+            applications=["APP-erp", "APP-slack"],
+            factors=["totp"],
+        ),
+        "USR-2001": IdentityUserSeed(
+            user_id="USR-2001",
+            email="brian@macrocompute.example",
+            login="brian",
+            first_name="Brian",
+            last_name="Park",
+            title="Finance Analyst",
+            department="Finance",
+            status="PROVISIONED",
+            groups=["GRP-finance"],
+            applications=["APP-erp"],
+        ),
+        "USR-3001": IdentityUserSeed(
+            user_id="USR-3001",
+            email="sara@macrocompute.example",
+            login="sara",
+            first_name="Sara",
+            last_name="Kent",
+            title="Vendor Ops",
+            department="Operations",
+            status="DEPROVISIONED",
+            groups=["GRP-operations"],
+            applications=["APP-erp"],
+        ),
+    }
+    identity_groups = {
+        "GRP-procurement": IdentityGroupSeed(
+            group_id="GRP-procurement",
+            name="Procurement Admins",
+            description="Manage procurement approvals",
+            members=["USR-1001"],
+        ),
+        "GRP-finance": IdentityGroupSeed(
+            group_id="GRP-finance",
+            name="Finance Analysts",
+            description="Review spend and approvals",
+            members=["USR-2001"],
+        ),
+        "GRP-it": IdentityGroupSeed(
+            group_id="GRP-it",
+            name="IT Support",
+            description="Manage SSO and device controls",
+            members=["USR-1001"],
+        ),
+        "GRP-operations": IdentityGroupSeed(
+            group_id="GRP-operations",
+            name="Operations",
+            members=["USR-3001"],
+        ),
+    }
+    identity_apps = {
+        "APP-erp": IdentityApplicationSeed(
+            app_id="APP-erp",
+            label="Macro ERP",
+            description="Finance and procurement ERP",
+            sign_on_mode="SAML_2_0",
+            assignments=["USR-1001", "USR-2001"],
+        ),
+        "APP-slack": IdentityApplicationSeed(
+            app_id="APP-slack",
+            label="Slack",
+            description="Team messaging",
+            sign_on_mode="OIDC",
+            assignments=["USR-1001"],
+        ),
+    }
     return Scenario(
         budget_cap_usd=3200,
         derail_prob=0.05,
@@ -118,6 +206,9 @@ def scenario_multi_channel() -> Scenario:
         documents=docs,
         tickets=tickets,
         derail_events=events,
+        identity_users=identity_users,
+        identity_groups=identity_groups,
+        identity_applications=identity_apps,
     )
 
 

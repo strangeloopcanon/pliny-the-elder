@@ -10,6 +10,7 @@ Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server expose
 
 ### Highlights
 - **MCP-native tools**: `slack.*`, `mail.*`, `browser.*`, and `vei.*` helpers (now including `vei.tools.search` for catalog retrieval).
+- **Identity twin**: Okta-style MCP surface (`okta.*`) for listing/activating/deactivating users, managing groups, and assigning SSO apps.
 - **Deterministic**: seeded event bus for replies/arrivals/interrupts; identical runs for a fixed seed + artifacts.
 - **No external SaaS**: all data is synthetic; live modes can be sandboxed.
 
@@ -180,6 +181,15 @@ vei-demo --mode llm --model gpt-5 --artifacts-dir ./_vei_out/demo_run
 vei-demo --mode llm --transport stdio --model gpt-5 --artifacts-dir ./_vei_out/demo_run
 ```
 
+### Identity (Okta) Tools
+The router now exposes a synthetic Okta directory so agents can practice identity recovery and compliance workflows without talking to live SaaS.
+
+- `okta.list_users`, `okta.get_user`, `okta.activate_user`, `okta.deactivate_user`, `okta.reset_password`
+- `okta.list_groups`, `okta.assign_group`
+- `okta.list_applications`, `okta.assign_application`
+
+All responses come from deterministic scenario fixtures (`VEI_SCENARIO=multi_channel` seeds the directory by default). Each tool is searchable through `vei.tools.search`, and mutations update the in-memory simulator instantly so follow-up reads reflect the new state.
+
 ### Dataset tooling & evaluation
 
 Follow the canonical procurement workflow, then adapt it as needed:
@@ -231,7 +241,6 @@ unset VEI_SCENARIO
 After each run, review `trace.jsonl` and `score.json` in the chosen `--artifacts` directory to assess behaviour.
 
 ### Testing
-### Testing
 Prefer invoking pytest via the active interpreter to avoid mismatched runtimes:
 ```bash
 python -m pytest -q
@@ -241,6 +250,20 @@ Live LLM smoke (stdio transport; requires `OPENAI_API_KEY`):
 python -m pytest -q -k llm_stdio_smoke
 ```
 Notes: the suite autostarts the router over stdio, writes `trace.jsonl` under `VEI_ARTIFACTS_DIR`, and honours `VEI_MODEL` / `LLM_SMOKE_PROMPT` overrides.
+
+### Interface Targets
+Use the contract-aligned Make targets to prepare, lint, and test the repo:
+
+```bash
+make setup        # bootstrap .venv, install extras + tooling
+make check        # black/ruff/mypy/bandit/detect-secrets
+make test         # full pytest suite
+make llm-live     # runs vei-llm-test (needs OPENAI_API_KEY)
+make deps-audit   # pip-audit (advisory in baseline)
+make all          # check → test → llm-live → deps-audit
+```
+
+Set `VEI_LLM_LIVE_BYPASS=1` when running in environments without LLM credentials; otherwise provide provider keys before invoking `make llm-live` or `make all`.
 
 ## Configuration Cheatsheet
 - `VEI_ARTIFACTS_DIR` — where traces, transcripts, and scores are saved (set this for every run).
