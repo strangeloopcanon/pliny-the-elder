@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 @dataclass(slots=True)
@@ -57,7 +57,7 @@ class ToolRegistry:
         if name not in self._specs:
             raise KeyError(name)
         current = self._specs[name]
-        data = current.to_dict()
+        data: Dict[str, Any] = dict(current.to_dict())
         data.update(kwargs)
         self._specs[name] = ToolSpec(**data)
 

@@ -51,6 +51,44 @@ class Ticket:
 
 
 @dataclass
+class IdentityUserSeed:
+    """Seed data for an identity/Okta twin."""
+
+    user_id: str
+    email: str
+    first_name: str
+    last_name: str
+    login: Optional[str] = None
+    display_name: Optional[str] = None
+    status: Optional[str] = "ACTIVE"
+    department: Optional[str] = None
+    title: Optional[str] = None
+    manager: Optional[str] = None
+    groups: Optional[List[str]] = None
+    applications: Optional[List[str]] = None
+    factors: Optional[List[str]] = None
+    last_login_ms: Optional[int] = None
+
+
+@dataclass
+class IdentityGroupSeed:
+    group_id: str
+    name: str
+    description: Optional[str] = None
+    members: Optional[List[str]] = None
+
+
+@dataclass
+class IdentityApplicationSeed:
+    app_id: str
+    label: str
+    status: Optional[str] = "ACTIVE"
+    description: Optional[str] = None
+    sign_on_mode: Optional[str] = "SAML_2_0"
+    assignments: Optional[List[str]] = None
+
+
+@dataclass
 class Scenario:
     # Slack configuration
     budget_cap_usd: Optional[int] = None
@@ -73,3 +111,6 @@ class Scenario:
     tickets: Optional[Dict[str, Ticket]] = None
     triggers: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
+    identity_users: Optional[Dict[str, IdentityUserSeed]] = None
+    identity_groups: Optional[Dict[str, IdentityGroupSeed]] = None
+    identity_applications: Optional[Dict[str, IdentityApplicationSeed]] = None

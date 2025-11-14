@@ -8,7 +8,7 @@ from pathlib import Path
 import heapq
 import threading
 import queue
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from pydantic import BaseModel
 from vei.world.scenario import Scenario
@@ -21,6 +21,8 @@ from vei.world.state import Event as StateEvent, StateStore
 from .calendar import CalendarSim
 from .docs import DocsSim
 from .tickets import TicketsSim
+from .errors import MCPError
+from .tool_providers import ToolProvider
 from .tool_registry import ToolRegistry, ToolSpec
 
 
@@ -29,13 +31,6 @@ def _safe_int(x: Any, default: int = 0) -> int:
         return int(x)
     except Exception:
         return default
-
-
-class MCPError(Exception):
-    def __init__(self, code: str, message: str | None = None):
-        self.code = code
-        self.message = message or code
-        super().__init__(self.message)
 
 
 class Observation(BaseModel):
@@ -600,6 +595,7 @@ class Router:
             self._load_receipts()
 
         self.registry = ToolRegistry()
+        self.tool_providers: List[ToolProvider] = []
         self._seed_tool_registry()
         fault_profile_env = os.environ.get("VEI_FAULT_PROFILE", "off").strip().lower()
         if fault_profile_env not in FAULT_PROFILES:
@@ -669,6 +665,14 @@ class Router:
             self.crm = CrmSim(self.bus, self.scenario)
         except Exception:
             self.crm = None  # type: ignore[attr-defined]
+        # Optional identity twin
+        try:
+            from .identity import OktaSim, OktaToolProvider
+
+            self.okta = OktaSim(self.scenario)
+            self.register_tool_provider(OktaToolProvider(self.okta))
+        except Exception:
+            self.okta = None  # type: ignore[attr-defined]
 
         drift_seed_env = os.environ.get("VEI_DRIFT_SEED")
         try:
@@ -863,6 +867,18 @@ class Router:
         if include_state:
             snapshot["state"] = state
         return snapshot
+
+    def register_tool_provider(self, provider: ToolProvider) -> None:
+        """Register a provider and copy its specs into the registry."""
+        self.tool_providers.append(provider)
+        self._register_tool_specs(provider.specs())
+
+    def _register_tool_specs(self, specs: Iterable[ToolSpec]) -> None:
+        for spec in specs:
+            try:
+                self.registry.register(spec)
+            except ValueError:
+                continue
 
     def _seed_tool_registry(self) -> None:
         specs = [
@@ -1125,12 +1141,7 @@ class Router:
         specs.extend(ticket_specs)
         specs.extend(erp_specs)
         specs.extend(crm_specs)
-        for spec in specs:
-            try:
-                self.registry.register(spec)
-            except ValueError:
-                # Allow duplicate registration attempts when multiple routers spin up in tests.
-                continue
+        self._register_tool_specs(specs)
 
     def last_receipt(self) -> Optional[Dict[str, Any]]:
         return self._receipts[-1] if self._receipts else None
@@ -1325,6 +1336,10 @@ class Router:
             if tool == "crm.log_activity":
                 return crm.log_activity(**args)
             raise MCPError("unknown_tool", f"No such tool: {tool}")
+
+        for provider in self.tool_providers:
+            if provider.handles(tool):
+                return provider.call(tool, args)
 
         raise MCPError("unknown_tool", f"No such tool: {tool}")
 
