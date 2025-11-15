@@ -129,6 +129,9 @@ Create a `.env` at the repo root:
 # LLM Providers (add any/all you plan to use)
 OPENAI_API_KEY=sk-your-openai-key-here
 ANTHROPIC_API_KEY=sk-ant-your-anthropic-key-here
+ANTHROPIC_BETA=claude-4.5-latest          # Optional header required for new Claude releases
+ANTHROPIC_VERSION=2023-06-01              # Override if Anthropic requests a newer version
+ANTHROPIC_USE_BETA=1                      # Route through anthropic.beta.messages for preview models
 GOOGLE_API_KEY=your-google-api-key-here       # or GEMINI_API_KEY
 OPENROUTER_API_KEY=sk-or-your-openrouter-key-here
 
@@ -231,27 +234,36 @@ vei-llm-test --model gpt-5 --task "Research vendor quote" --dataset ./_vei_out/r
   --artifacts ./_vei_out/llm_eval
 ```
 
-To exercise richer environments (tickets + docs + seeded disruptions):
+### Evaluation Prompts
+Use realistic operator requests instead of checklists. A few seeded examples:
 
-```bash
-export VEI_SCENARIO=multi_channel
-vei-llm-test --model gpt-5 \
-  --task "Review ticket TCK-42, gather laptop quote, and email results" \
-  --max-steps 12 --artifacts ./_vei_out/llm_eval_multichannel
+1. **Multi-system procurement (`VEI_SCENARIO=multi_channel`)**  
+   “That MacroBook request is still open. Pull the latest vendor quote, cite it in Slack, email the supplier for ETA, and make sure ticket TCK-42 references the doc you created.”  
+   ```bash
+   export VEI_SCENARIO=multi_channel
+   vei-llm-test --model gpt-5 \
+     --task "MacroBook request still open. Cite the vendor quote in Slack, email supplier for ETA, and update TCK-42 with the doc link." \
+     --max-steps 14 --artifacts ./_vei_out/llm_eval_multichannel
+   ```
 
-# Compliance variant stresses doc/ticket linking and audit follow-ups
-export VEI_SCENARIO=multi_channel_compliance
-vei-llm-test --model gpt-5 \
-  --task "Capture quote in Docs, update all linked tickets, and satisfy audit reminders" \
-  --max-steps 14 --artifacts ./_vei_out/llm_eval_compliance
+2. **Compliance follow-up (`VEI_SCENARIO=multi_channel_compliance`)**  
+   “Audit ping: log the quote under PROC-7, link RISK-9, and make sure TCK-42/TCK-88 both reflect the ETA. Ping the auditor once it’s all tied off.”  
+   ```bash
+   export VEI_SCENARIO=multi_channel_compliance
+   vei-llm-test --model gpt-5 \
+     --task "Audit wants confirmation. File the quote under PROC-7, tie RISK-9, update TCK-42/TCK-88 with ETA, and brief the auditor." \
+     --max-steps 16 --artifacts ./_vei_out/llm_eval_compliance
+   ```
 
-# Identity/access workflow with Okta + ServiceDesk
-export VEI_SCENARIO=identity_access
-vei-llm-test --model gpt-5 \
-  --task "Verify Okta status for Amy, update ServiceDesk REQ-8801 with security approval, log SOP steps in Docs and ticket TCK-77." \
-  --max-steps 16 --artifacts ./_vei_out/llm_eval_identity
-unset VEI_SCENARIO
-```
+3. **Identity/access escalation (`VEI_SCENARIO=identity_access`)**  
+   “Amy still can’t approve POs. Confirm her Okta status, add the security note to ServiceDesk REQ-8801, document the SOP steps, update ticket TCK-77, and brief #identity-ops so security knows it’s done.”  
+   ```bash
+   export VEI_SCENARIO=identity_access
+   vei-llm-test --model gpt-5 \
+     --task "Amy still lacks procurement admin. Confirm Okta, update ServiceDesk REQ-8801 with security approval + comment, log PROC-7 notes, update TCK-77, and brief Slack." \
+     --max-steps 18 --artifacts ./_vei_out/llm_eval_identity
+   unset VEI_SCENARIO
+   ```
 
 After each run, review `trace.jsonl` and `score.json` in the chosen `--artifacts` directory to assess behaviour.
 

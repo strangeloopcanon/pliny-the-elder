@@ -161,16 +161,29 @@ async def _anthropic_plan(
     if AsyncAnthropic is None:
         raise RuntimeError("anthropic SDK not installed; install with extras [llm]")
     
-    client = AsyncAnthropic(
-        api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
-    )
+    headers: Dict[str, str] = {}
+    version = os.environ.get("ANTHROPIC_VERSION")
+    beta = os.environ.get("ANTHROPIC_BETA")
+    if version:
+        headers["anthropic-version"] = version.strip()
+    if beta:
+        headers["anthropic-beta"] = beta.strip()
+    client_kwargs: Dict[str, Any] = {
+        "api_key": api_key or os.environ.get("ANTHROPIC_API_KEY")
+    }
+    if headers:
+        client_kwargs["default_headers"] = headers
+    client = AsyncAnthropic(**client_kwargs)
     
+    use_beta_api = (os.environ.get("ANTHROPIC_USE_BETA", "").strip().lower() in {"1", "true", "yes"}) or model.startswith("claude-4.5")
+    messages_api = client.beta.messages if use_beta_api else client.messages
+
     try:
         bridge_mode = bool(tool_schemas and len(tool_schemas) == 1 and tool_schemas[0]["name"] == "vei_call")
         if tool_schemas:
             first_name = tool_schemas[0]["name"] if tool_schemas else "<none>"
             msg = await asyncio.wait_for(
-                client.messages.create(
+                messages_api.create(
                     model=model,
                     system=system,
                     max_tokens=2048,
@@ -187,7 +200,7 @@ async def _anthropic_plan(
             )
         else:
             msg = await asyncio.wait_for(
-                client.messages.create(
+                messages_api.create(
                     model=model,
                     system=system + "\nYou MUST respond ONLY with valid JSON. No explanations, no prose, ONLY JSON.",
                     max_tokens=2048,

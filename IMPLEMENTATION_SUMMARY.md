@@ -148,6 +148,7 @@ Automatically:
 
 - Implemented a ServiceNow-style ServiceDesk simulator with MCP tools (`servicedesk.*`) for listing/updating incidents and requests, enabling cross-system workflows (identity + access ticket).
 - `Scenario` now carries `service_incidents` / `service_requests` seeds; the catalog gains `identity_access`, which requires Okta verification plus ServiceDesk updates before closing ticket `TCK-77`.
+- Added a set of narrative evaluation prompts (multi-channel, compliance, identity-access) that mirror how humans would request the work, making LLM assessment more realistic.
 - Router auto-registers the ServiceDesk provider so tools surface in catalog searches alongside Okta/ERP/CRM; new pytest coverage verifies registration and mutations.
 
 ### 7. **Package Updates** (`pyproject.toml`)

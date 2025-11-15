@@ -382,17 +382,27 @@ def scenario_identity_access() -> Scenario:
                 "from": "security@macrocompute.example",
                 "subj": "Security Approval Pending",
                 "body_text": (
-                    "Confirm Okta status for amy@macrocompute.example, then update ServiceDesk request REQ-8801 "
-                    "with security approval and comment before granting access."
+                    "We escalated Amy Santiago's procurement admin request. "
+                    "Double-check her Okta profile, add the approval note to ServiceDesk REQ-8801, "
+                    "and record the steps in the SOP doc before replying."
                 ),
             },
-        }
+        },
+        {
+            "dt_ms": 7000,
+            "target": "slack",
+            "payload": {
+                "channel": "#identity-ops",
+                "text": (
+                    "@procurement Can someone close the loop on REQ-8801 today? "
+                    "Security needs proof you checked Okta and logged PROC-7 / RISK-11."
+                ),
+            },
+        },
     ]
     return Scenario(
         budget_cap_usd=None,
-        slack_initial_message=(
-            "Need to approve procurement admin rights for Amy. Follow SOP PROC-7 and update ServiceDesk request REQ-8801."
-        ),
+        slack_initial_message="Amy's procurement admin access is stuck. Make sure security signs off via REQ-8801 and document it per PROC-7.",
         vendor_reply_variants=["Not applicable"],
         documents=docs,
         tickets=tickets,
