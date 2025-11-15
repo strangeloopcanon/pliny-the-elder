@@ -11,6 +11,7 @@ Fully synthetic, MCP-native Slack/Mail/Browser world. A single MCP server expose
 ### Highlights
 - **MCP-native tools**: `slack.*`, `mail.*`, `browser.*`, and `vei.*` helpers (now including `vei.tools.search` for catalog retrieval).
 - **Identity twin**: Okta-style MCP surface (`okta.*`) for listing/activating/deactivating users, managing groups, and assigning SSO apps.
+- **ServiceDesk twin**: ServiceNow-style workflow tools (`servicedesk.*`) for incidents and access requests, wired into the same deterministic bus.
 - **Deterministic**: seeded event bus for replies/arrivals/interrupts; identical runs for a fixed seed + artifacts.
 - **No external SaaS**: all data is synthetic; live modes can be sandboxed.
 
@@ -190,6 +191,14 @@ The router now exposes a synthetic Okta directory so agents can practice identit
 
 All responses come from deterministic scenario fixtures (`VEI_SCENARIO=multi_channel` seeds the directory by default). Each tool is searchable through `vei.tools.search`, and mutations update the in-memory simulator instantly so follow-up reads reflect the new state.
 
+### ServiceDesk Tools
+ServiceNow-style workflows are also available inside the router:
+
+- `servicedesk.list_incidents`, `servicedesk.get_incident`, `servicedesk.update_incident`
+- `servicedesk.list_requests`, `servicedesk.get_request`, `servicedesk.update_request`
+
+These draw from the scenario’s `service_incidents` / `service_requests` seeds, making it easy to script access requests or outage coordination alongside Okta/ERP data.
+
 ### Dataset tooling & evaluation
 
 Follow the canonical procurement workflow, then adapt it as needed:
@@ -235,6 +244,12 @@ export VEI_SCENARIO=multi_channel_compliance
 vei-llm-test --model gpt-5 \
   --task "Capture quote in Docs, update all linked tickets, and satisfy audit reminders" \
   --max-steps 14 --artifacts ./_vei_out/llm_eval_compliance
+
+# Identity/access workflow with Okta + ServiceDesk
+export VEI_SCENARIO=identity_access
+vei-llm-test --model gpt-5 \
+  --task "Verify Okta status for Amy, update ServiceDesk REQ-8801 with security approval, log SOP steps in Docs and ticket TCK-77." \
+  --max-steps 16 --artifacts ./_vei_out/llm_eval_identity
 unset VEI_SCENARIO
 ```
 

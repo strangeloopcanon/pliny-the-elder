@@ -13,6 +13,8 @@ from .scenario import (
     IdentityApplicationSeed,
     IdentityGroupSeed,
     IdentityUserSeed,
+    ServiceDeskIncident,
+    ServiceDeskRequest,
 )
 
 
@@ -198,6 +200,28 @@ def scenario_multi_channel() -> Scenario:
             assignments=["USR-1001"],
         ),
     }
+    service_incidents = {
+        "INC-5001": ServiceDeskIncident(
+            incident_id="INC-5001",
+            title="Supplier portal MFA failures",
+            status="IN_PROGRESS",
+            priority="P2",
+            assignee="maya.ops",
+            description="Multiple procurement approvers cannot MFA into the supplier portal.",
+            history=[{"status": "NEW"}, {"status": "IN_PROGRESS", "assignee": "maya.ops"}],
+        )
+    }
+    service_requests = {
+        "REQ-8801": ServiceDeskRequest(
+            request_id="REQ-8801",
+            title="Access: Procurement Admin",
+            status="PENDING_APPROVAL",
+            requester="amy@macrocompute.example",
+            description="Need elevated rights to review MacroBook vendor contract.",
+            approvals=[{"stage": "manager", "status": "APPROVED"}, {"stage": "security", "status": "PENDING"}],
+            history=[{"status": "PENDING_APPROVAL"}],
+        )
+    }
     return Scenario(
         budget_cap_usd=3200,
         derail_prob=0.05,
@@ -209,6 +233,8 @@ def scenario_multi_channel() -> Scenario:
         identity_users=identity_users,
         identity_groups=identity_groups,
         identity_applications=identity_apps,
+        service_incidents=service_incidents,
+        service_requests=service_requests,
     )
 
 
@@ -319,11 +345,112 @@ def scenario_multi_channel_compliance() -> Scenario:
     )
 
 
+def scenario_identity_access() -> Scenario:
+    docs = {
+        "PROC-7": Document(
+            doc_id="PROC-7",
+            title="Procurement Admin Access SOP",
+            body=(
+                "Steps:\n"
+                "1. Verify requester in Okta and confirm status ACTIVE.\n"
+                "2. Update ServiceDesk request with security approval + comment.\n"
+                "3. Log summary in Docs and ticket TCK-77.\n"
+            ),
+            tags=["procurement", "access"],
+        ),
+        "RISK-11": Document(
+            doc_id="RISK-11",
+            title="Access Risk Register",
+            body="All privileged access approvals must include Okta verification + ServiceDesk trail.",
+            tags=["risk"],
+        ),
+    }
+    tickets = {
+        "TCK-77": Ticket(
+            ticket_id="TCK-77",
+            title="Grant Procurement Admin to Amy",
+            status="open",
+            description="Escalated access request for procurement admin rights.",
+            history=[{"status": "open"}],
+        )
+    }
+    events = [
+        {
+            "dt_ms": 4000,
+            "target": "mail",
+            "payload": {
+                "from": "security@macrocompute.example",
+                "subj": "Security Approval Pending",
+                "body_text": (
+                    "Confirm Okta status for amy@macrocompute.example, then update ServiceDesk request REQ-8801 "
+                    "with security approval and comment before granting access."
+                ),
+            },
+        }
+    ]
+    return Scenario(
+        budget_cap_usd=None,
+        slack_initial_message=(
+            "Need to approve procurement admin rights for Amy. Follow SOP PROC-7 and update ServiceDesk request REQ-8801."
+        ),
+        vendor_reply_variants=["Not applicable"],
+        documents=docs,
+        tickets=tickets,
+        derail_events=events,
+        metadata={
+            "identity_request": "REQ-8801",
+            "ticket": "TCK-77",
+            "required_docs": ["PROC-7", "RISK-11"],
+        },
+        identity_users={
+            "USR-1001": IdentityUserSeed(
+                user_id="USR-1001",
+                email="amy@macrocompute.example",
+                login="amy",
+                first_name="Amy",
+                last_name="Santiago",
+                title="Procurement Manager",
+                department="Procurement",
+                status="PROVISIONED",
+                groups=["GRP-procurement"],
+                applications=["APP-erp"],
+            )
+        },
+        identity_groups={
+            "GRP-procurement": IdentityGroupSeed(
+                group_id="GRP-procurement",
+                name="Procurement Admins",
+                members=["USR-1001"],
+            )
+        },
+        identity_applications={
+            "APP-erp": IdentityApplicationSeed(
+                app_id="APP-erp",
+                label="Macro ERP",
+                status="ACTIVE",
+                sign_on_mode="SAML_2_0",
+                assignments=["USR-1001"],
+            )
+        },
+        service_requests={
+            "REQ-8801": ServiceDeskRequest(
+                request_id="REQ-8801",
+                title="Access: Procurement Admin",
+                status="PENDING_APPROVAL",
+                requester="amy@macrocompute.example",
+                description="Needs admin role to close P1 vendor issue.",
+                approvals=[{"stage": "manager", "status": "APPROVED"}, {"stage": "security", "status": "PENDING"}],
+            )
+        },
+    )
+
+
 _CATALOG: Dict[str, Scenario] = {
     "macrocompute_default": scenario_macrocompute_default(),
     "extended_store": scenario_extended_store(),
     "multi_channel": scenario_multi_channel(),
     "multi_channel_compliance": scenario_multi_channel_compliance(),
+    "identity_access": scenario_identity_access(),
 }
 
 
