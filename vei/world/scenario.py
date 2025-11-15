@@ -51,6 +51,34 @@ class Ticket:
 
 
 @dataclass
+class ServiceDeskIncident:
+    """Incident tracked by the ServiceDesk twin."""
+
+    incident_id: str
+    title: str
+    status: str
+    priority: Optional[str] = None
+    assignee: Optional[str] = None
+    description: Optional[str] = None
+    history: Optional[List[Dict[str, Any]]] = None
+    comments: Optional[List[Dict[str, Any]]] = None
+
+
+@dataclass
+class ServiceDeskRequest:
+    """Access/service request tracked by the ServiceDesk twin."""
+
+    request_id: str
+    title: str
+    status: str
+    requester: Optional[str] = None
+    description: Optional[str] = None
+    approvals: Optional[List[Dict[str, Any]]] = None
+    history: Optional[List[Dict[str, Any]]] = None
+    comments: Optional[List[Dict[str, Any]]] = None
+
+
+@dataclass
 class IdentityUserSeed:
     """Seed data for an identity/Okta twin."""
 
@@ -114,3 +142,5 @@ class Scenario:
     identity_users: Optional[Dict[str, IdentityUserSeed]] = None
     identity_groups: Optional[Dict[str, IdentityGroupSeed]] = None
     identity_applications: Optional[Dict[str, IdentityApplicationSeed]] = None
+    service_incidents: Optional[Dict[str, ServiceDeskIncident]] = None
+    service_requests: Optional[Dict[str, ServiceDeskRequest]] = None

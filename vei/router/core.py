@@ -23,6 +23,7 @@ from .docs import DocsSim
 from .tickets import TicketsSim
 from .errors import MCPError
 from .tool_providers import ToolProvider
+from .servicedesk import ServiceDeskSim, ServiceDeskToolProvider
 from .tool_registry import ToolRegistry, ToolSpec
 
 
@@ -673,6 +674,9 @@ class Router:
             self.register_tool_provider(OktaToolProvider(self.okta))
         except Exception:
             self.okta = None  # type: ignore[attr-defined]
+        # ServiceDesk twin
+        self.servicedesk = ServiceDeskSim(self.scenario)
+        self.register_tool_provider(ServiceDeskToolProvider(self.servicedesk))
 
         drift_seed_env = os.environ.get("VEI_DRIFT_SEED")
         try:
