@@ -114,7 +114,7 @@ def _build_anthropic_tool_schemas(tools_info: object) -> Tuple[list[dict[str, An
     seen_aliases: set[str] = set()
     for tool in getattr(tools_info, "tools", []) or []:
         name = getattr(tool, "name", None)
-        if not name:
+        if not name or name == "vei.inject":
             continue
         alias = _sanitize_tool_name(name, seen_aliases)
         alias_map[alias] = name
@@ -269,6 +269,7 @@ async def run_episode(
     dataset_path: str | None = None,
     artifacts_dir: str | None = None,
     tool_top_k: int = 0,
+    interactive: bool = False,
 ) -> list[dict]:
     # stdio-only transport
     py = os.environ.get("PYTHON", None) or (sys.executable if 'sys' in globals() else None)
@@ -292,7 +293,7 @@ async def run_episode(
                 tools_info = await session.list_tools()
                 for tool in getattr(tools_info, "tools", []) or []:
                     name = getattr(tool, "name", None)
-                    if not name:
+                    if not name or name == "vei.inject":
                         continue
                     description = getattr(tool, "description", "") or f"MCP tool {name}"
                     tool_catalog[name] = {"description": description}
@@ -357,6 +358,42 @@ async def run_episode(
             for step in range(max_steps):
                 obs_raw = await call_mcp_tool(session, "vei.observe", {})
                 obs = _normalize_result(obs_raw)
+
+                if interactive:
+                    print(f"\n--- Step {step} ---")
+                    print(f"Observation: {json.dumps(obs, indent=2)}")
+                    while True:
+                        import sys
+                        print("Press Enter to continue, or 'i' to inject event...", file=sys.stderr)
+                        cmd = input("> ").strip()
+                        if cmd == 'i':
+                            target = input("Target (slack/mail) [slack]: ").strip() or "slack"
+                            if target == "slack":
+                                text = input("Message text: ").strip()
+                                user_id = input("User [cfo]: ").strip() or "cfo"
+                                channel = input("Channel [#procurement]: ").strip() or "#procurement"
+                                payload = {"channel": channel, "text": text, "user": user_id}
+                            elif target == "mail":
+                                subj = input("Subject: ").strip()
+                                body = input("Body: ").strip()
+                                sender = input("From [human@example.com]: ").strip() or "human@example.com"
+                                payload = {"from": sender, "subj": subj, "body_text": body}
+                            else:
+                                print("Unknown target")
+                                continue
+
+                            try:
+                                await call_mcp_tool(session, "vei.inject", {"target": target, "payload": payload, "dt_ms": 0})
+                                print(f"Injected event to {target}.")
+                                # Re-observe to capture the effect
+                                obs_raw = await call_mcp_tool(session, "vei.observe", {})
+                                obs = _normalize_result(obs_raw)
+                                print(f"Updated Observation: {json.dumps(obs, indent=2)}")
+                            except Exception as e:
+                                print(f"Injection failed: {e}")
+                        else:
+                            break
+
                 transcript.append({"observation": obs})
                 history.append(f"observation {step}: {json.dumps(obs)}")
                 action_menu = obs.get("action_menu") if isinstance(obs, dict) else None
@@ -615,6 +652,7 @@ def run(
         0,
         help="If >0, limit prompt-visible tools to top-K retrieved via vei.tools.search (baseline tools always included).",
     ),
+    interactive: bool = typer.Option(False, help="Run in interactive mode to allow manual event injection."),
 ) -> None:
     load_dotenv(override=True)
     eff_provider = auto_provider_for_model(model, provider)
@@ -646,6 +684,7 @@ def run(
             dataset_path=str(dataset) if dataset else None,
             artifacts_dir=str(artifacts) if artifacts else None,
             tool_top_k=tool_top_k,
+            interactive=interactive,
         )
     )
     typer.echo(json.dumps(transcript, indent=2))

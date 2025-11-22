@@ -403,7 +403,8 @@ class SlackSim:
         if not ch:
             raise MCPError("unknown_channel")
         ts = str(len(ch["messages"]) + 1)
-        ch["messages"].append({"ts": ts, "user": "cfo", "text": event["text"], "thread_ts": event.get("thread_ts")})
+        user = event.get("user", "cfo")
+        ch["messages"].append({"ts": ts, "user": user, "text": event["text"], "thread_ts": event.get("thread_ts")})
         ch["unread"] += 1
         return {"ok": True}
 
@@ -912,6 +913,11 @@ class Router:
                 side_effects=(),
             ),
             ToolSpec(
+                name="vei.inject",
+                description="Inject an external event (e.g. human message) into the simulation.",
+                side_effects=("event_schedule",),
+            ),
+            ToolSpec(
                 name="slack.send_message",
                 description="Post a message into a Slack channel thread.",
                 side_effects=("slack_outbound",),
@@ -1211,6 +1217,8 @@ class Router:
             if not target_tool:
                 raise MCPError("invalid_args", "act_and_observe requires tool")
             return self.act_and_observe(target_tool, target_args)
+        if tool == "vei.inject":
+            return self.inject(**args)
         if not tool.startswith("vei."):
             self._maybe_fault(tool)
         if tool == "slack.list_channels":
@@ -1409,6 +1417,11 @@ class Router:
             focus = "crm"
         obs = self.snapshot_observation(focus)
         return {"result": result, "observation": obs.model_dump()}
+
+    def inject(self, target: str, payload: Dict[str, Any], dt_ms: int = 0) -> Dict[str, Any]:
+        """Inject an external event into the bus."""
+        self.bus.schedule(dt_ms=dt_ms, target=target, payload=payload)
+        return {"ok": True}
 
     def pending(self) -> Dict[str, int]:
         """Return pending event counts per target without advancing time."""
